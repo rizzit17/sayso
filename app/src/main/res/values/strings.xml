@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Prism Teachable Automation</string>
+    <string name="accessibility_service_description">Enables Samsung PRISM Teachable Voice Automation to observe UI structure and replay learned multi-step workflows across applications.</string>
+</resources>
