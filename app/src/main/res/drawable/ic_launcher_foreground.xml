@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Sayso Periwinkle Halo -->
+    <path
+        android:fillAlpha="0.25"
+        android:fillColor="#DDE1FF"
+        android:pathData="M54,54m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0" />
+
+    <!-- Sayso Microphone Capsule -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 C47.37,30 42,35.37 42,42 L42,54 C42,60.63 47.37,66 54,66 C60.63,66 66,60.63 66,54 L66,42 C66,35.37 60.63,30 54,30 Z" />
+
+    <!-- Sayso Microphone Cradle Arc -->
+    <path
+        android:fillColor="#EEF0FF"
+        android:pathData="M36,52 C36,61.94 44.06,70 54,70 C63.94,70 72,61.94 72,52 L67,52 C67,59.18 61.18,65 54,65 C46.82,65 41,59.18 41,52 L36,52 Z" />
+
+    <!-- Microphone Stand Stem -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51.5,70 h5 v10 h-5 z" />
+
+    <!-- Microphone Stand Base -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,78 h20 v4 h-20 z" />
+
+    <!-- Sayso Amber Intelligence Spark Dot -->
+    <path
+        android:fillColor="#FFB784"
+        android:pathData="M74,34m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
+</vector>
