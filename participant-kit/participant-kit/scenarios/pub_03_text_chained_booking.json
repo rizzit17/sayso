@@ -1,0 +1,79 @@
+{
+  "scenario_id": "pub_03_text_chained_booking",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L2",
+    "description": "Chained calls: search, then book with the returned flight_id. Exercises the idempotence penalty surface."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Find a flight to Denver and ",
+        "end_of_turn": false
+      }
+    },
+    {
+      "timestamp_ms": 900,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "book the 8 AM one for Alice.",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "search_called",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "denver",
+            "den"
+          ]
+        },
+        "must_complete": true,
+        "weight": 0.3
+      },
+      {
+        "id": "book_called",
+        "type": "tool_called",
+        "tool": "book_flight",
+        "args_subset": {
+          "flight_id": [
+            "fl-den-8am"
+          ],
+          "passenger_name": [
+            "alice"
+          ]
+        },
+        "must_complete": true,
+        "weight": 0.45
+      },
+      {
+        "id": "final_confirms",
+        "type": "final_response_contains",
+        "any_of": [
+          "book",
+          "bk-"
+        ],
+        "weight": 0.25
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 1,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        }
+      ]
+    },
+    "safety": {
+      "max_fillers": 3
+    }
+  }
+}

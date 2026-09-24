@@ -1,0 +1,120 @@
+{
+  "scenario_id": "pub_02_text_interrupt",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L2",
+    "description": "Destination change while flight_search is in flight. Stale call must be cancelled; state must update."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Please book a flight to ",
+        "end_of_turn": false
+      }
+    },
+    {
+      "timestamp_ms": 800,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Boston for tomorrow.",
+        "end_of_turn": true
+      }
+    },
+    {
+      "timestamp_ms": 1900,
+      "event_type": "interruption",
+      "payload": {
+        "text": "Wait, actually make it New York."
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "search_nyc",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "new york",
+            "nyc"
+          ]
+        },
+        "after_ms": 1900,
+        "must_complete": true,
+        "weight": 0.4
+      },
+      {
+        "id": "final_nyc",
+        "type": "final_response_contains",
+        "any_of": [
+          "new york",
+          "nyc"
+        ],
+        "weight": 0.3
+      },
+      {
+        "id": "no_new_boston_calls",
+        "type": "tool_not_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "boston",
+            "bos"
+          ]
+        },
+        "after_ms": 1900,
+        "weight": 0.3
+      },
+      {
+        "id": "ack_mentions_new_city",
+        "type": "spoken_contains",
+        "any_of": [
+          "new york",
+          "nyc"
+        ],
+        "after_ms": 1900,
+        "before_ms": 3100,
+        "weight": 0.15,
+        "_comment": "first-response quality: the acknowledgment filler is content-aware, not generic"
+      }
+    ],
+    "recovery": {
+      "interrupt_at_ms": 1900,
+      "invalidated_calls": [
+        {
+          "tool": "flight_search",
+          "args_subset": {
+            "destination": [
+              "boston",
+              "bos"
+            ]
+          },
+          "invalid_after_ms": 1900
+        }
+      ],
+      "required_state_after_interrupt": {
+        "slots.destination": [
+          "new york",
+          "nyc"
+        ]
+      }
+    },
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 1,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        },
+        {
+          "event_index": 2,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+team: "your-team-name"
+entry_point: "agent.agent:ParticipantAgent"   # module:Class
+python: "3.12"                                 # 3.10–3.12
+requirements: []                               # extra pip packages, public PyPI only
+env: []                                        # e.g. SECRET_GEMINI_API_KEY (registered on the portal)

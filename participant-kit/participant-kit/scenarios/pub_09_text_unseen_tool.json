@@ -1,0 +1,99 @@
+{
+  "scenario_id": "pub_09_text_unseen_tool",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L2",
+    "description": "Zero-shot tool use: `weather_lookup` exists ONLY in this scenario's tool_manifest (delivered as the first event). The agent must read the schema, call it with valid args, and ground the answer \u2014 without forcing the request into a known tool. Hidden scenarios do this with ~10 tools."
+  },
+  "tool_manifest": {
+    "weather_lookup": {
+      "kind": "read_only",
+      "delay_range_ms": [
+        900,
+        1800
+      ],
+      "description": "Current weather and a short forecast for a city.",
+      "args": {
+        "city": {
+          "type": "string",
+          "required": true,
+          "description": "City name."
+        },
+        "units": {
+          "type": "string",
+          "required": false,
+          "enum": [
+            "metric",
+            "imperial"
+          ],
+          "description": "Temperature units (default imperial)."
+        }
+      },
+      "default_result": {
+        "condition": "sunny",
+        "temp_f": 74,
+        "forecast": "clear skies through Friday"
+      }
+    }
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "What's the weather like ",
+        "end_of_turn": false
+      }
+    },
+    {
+      "timestamp_ms": 800,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "in Denver right now?",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "unseen_tool_called",
+        "type": "tool_called",
+        "tool": "weather_lookup",
+        "args_subset": {
+          "city": [
+            "denver",
+            "den"
+          ]
+        },
+        "must_complete": true,
+        "weight": 0.5
+      },
+      {
+        "id": "not_forced_into_known_tool",
+        "type": "tool_not_called",
+        "tool": "flight_search",
+        "weight": 0.15
+      },
+      {
+        "id": "final_grounded_in_result",
+        "type": "final_response_contains",
+        "any_of": [
+          "sunny",
+          "74",
+          "clear"
+        ],
+        "weight": 0.35
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 1,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        }
+      ]
+    }
+  }
+}

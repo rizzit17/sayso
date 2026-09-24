@@ -1,0 +1,48 @@
+{
+  "scenario_id": "pub_04_text_no_tool",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L1",
+    "description": "Smart-router negative case: a simple question that needs NO tool. Calling one is a routing failure."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Hey, what can you help me with?",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "no_tools",
+        "type": "no_tool_calls",
+        "weight": 0.5
+      },
+      {
+        "id": "helpful_answer",
+        "type": "final_response_contains",
+        "any_of": [
+          "help",
+          "flight",
+          "book",
+          "device",
+          "assist"
+        ],
+        "weight": 0.5
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 0,
+          "full_credit_ms": 600,
+          "zero_credit_ms": 1500
+        }
+      ]
+    }
+  }
+}

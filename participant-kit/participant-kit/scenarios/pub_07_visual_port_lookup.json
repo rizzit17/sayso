@@ -1,0 +1,70 @@
+{
+  "scenario_id": "pub_07_visual_port_lookup",
+  "metadata": {
+    "modality": "visual",
+    "difficulty": "L2",
+    "description": "Raw frame: the side of a laptop with several ports; the HDMI port is centered. 'What is this port used for?' must be grounded via lookup_manual. The frame is the only source of the port type — a query built from the words alone returns the wrong manual pages first. Passing your own image embedding (hybrid search) earns a bonus checkpoint."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "video_frame",
+      "_reference_image": "laptop side panel; HDMI port centered, USB-A/headphone/Ethernet ports also visible",
+      "payload": {
+        "frame_id": "f_017",
+        "image_ref": "frames/pub_07_f017.png",
+        "device_hint": "GENERIC"
+      }
+    },
+    {
+      "timestamp_ms": 600,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "What is this port used for?",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "manual_lookup",
+        "type": "tool_called",
+        "tool": "lookup_manual",
+        "args_present": ["query"],
+        "must_complete": true,
+        "weight": 0.3
+      },
+      {
+        "id": "hybrid_bonus_embedding_passed",
+        "type": "tool_called",
+        "tool": "lookup_manual",
+        "args_present": ["query", "image_embedding"],
+        "weight": 0.15
+      },
+      {
+        "id": "final_grounded_hdmi",
+        "type": "final_response_contains",
+        "any_of": ["hdmi"],
+        "weight": 0.3
+      },
+      {
+        "id": "final_not_hedging",
+        "type": "spoken_not_contains",
+        "any_of": ["headphone", "usb", "ethernet"],
+        "weight": 0.15
+      },
+      {
+        "id": "cites_manual",
+        "type": "final_response_contains",
+        "any_of": ["manual", "page"],
+        "weight": 0.1
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {"event_index": 1, "full_credit_ms": 800, "zero_credit_ms": 2500}
+      ]
+    }
+  }
+}

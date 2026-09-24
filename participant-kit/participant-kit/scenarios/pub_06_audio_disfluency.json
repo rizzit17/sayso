@@ -1,0 +1,60 @@
+{
+  "scenario_id": "pub_06_audio_disfluency",
+  "metadata": {
+    "modality": "audio",
+    "difficulty": "L2",
+    "description": "Raw audio with a self-repair inside one turn: the user names one city, then corrects to another before the turn ends. The repaired value wins; the abandoned one must never reach a tool."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_audio_chunk",
+      "_reference_text": "uh, book a flight to Boston",
+      "payload": {
+        "audio_ref": "audio/pub_06_turn1_part1.mp3",
+        "duration_ms": 1200,
+        "end_of_turn": false
+      }
+    },
+    {
+      "timestamp_ms": 1400,
+      "event_type": "user_audio_chunk",
+      "_reference_text": "actually, make that New York",
+      "payload": {
+        "audio_ref": "audio/pub_06_turn1_part2.mp3",
+        "duration_ms": 1100,
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "search_repaired_city",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {"destination": ["new york", "nyc"]},
+        "must_complete": true,
+        "weight": 0.5
+      },
+      {
+        "id": "never_searched_abandoned_city",
+        "type": "tool_not_called",
+        "tool": "flight_search",
+        "args_subset": {"destination": ["boston", "bos"]},
+        "weight": 0.3
+      },
+      {
+        "id": "final_nyc",
+        "type": "final_response_contains",
+        "any_of": ["new york", "nyc"],
+        "weight": 0.2
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {"event_index": 1, "full_credit_ms": 800, "zero_credit_ms": 2500}
+      ]
+    }
+  }
+}

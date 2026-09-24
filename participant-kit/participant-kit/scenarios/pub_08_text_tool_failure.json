@@ -1,0 +1,78 @@
+{
+  "scenario_id": "pub_08_text_tool_failure",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L3",
+    "description": "Injected failure: the FIRST flight_search times out. A good agent retries (or degrades gracefully) and keeps the user informed."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Find me flights to Seattle please.",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "tool_overrides": {
+    "flight_search": [
+      {
+        "call_index": 0,
+        "delay_ms": 2200,
+        "error": "timeout",
+        "detail": "upstream flight API timed out"
+      }
+    ]
+  },
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "retried_after_failure",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "seattle",
+            "sea"
+          ]
+        },
+        "min_count": 2,
+        "weight": 0.4
+      },
+      {
+        "id": "eventual_success",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "seattle",
+            "sea"
+          ]
+        },
+        "must_complete": true,
+        "weight": 0.3
+      },
+      {
+        "id": "final_useful",
+        "type": "final_response_contains",
+        "any_of": [
+          "seattle",
+          "fl-sea",
+          "sorry",
+          "unable"
+        ],
+        "weight": 0.3
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 0,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        }
+      ]
+    }
+  }
+}

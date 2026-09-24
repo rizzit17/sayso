@@ -1,0 +1,70 @@
+{
+  "scenario_id": "pub_01_text_simple",
+  "metadata": {
+    "modality": "text",
+    "difficulty": "L1",
+    "description": "Single intent: search flights, answer grounded in result."
+  },
+  "events": [
+    {
+      "timestamp_ms": 100,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Can you find flights to ",
+        "end_of_turn": false
+      }
+    },
+    {
+      "timestamp_ms": 700,
+      "event_type": "user_speech_chunk",
+      "payload": {
+        "text": "Chicago for Friday?",
+        "end_of_turn": true
+      }
+    }
+  ],
+  "ground_truth": {
+    "checkpoints": [
+      {
+        "id": "search_called",
+        "type": "tool_called",
+        "tool": "flight_search",
+        "args_subset": {
+          "destination": [
+            "chicago",
+            "chi"
+          ]
+        },
+        "must_complete": true,
+        "weight": 0.5
+      },
+      {
+        "id": "final_grounded",
+        "type": "final_response_contains",
+        "any_of": [
+          "fl-chi",
+          "chicago"
+        ],
+        "weight": 0.3
+      },
+      {
+        "id": "state_dest",
+        "type": "state_snapshot",
+        "path": "slots.destination",
+        "any_of": [
+          "chicago"
+        ],
+        "weight": 0.2
+      }
+    ],
+    "latency": {
+      "respond_to": [
+        {
+          "event_index": 1,
+          "full_credit_ms": 800,
+          "zero_credit_ms": 2500
+        }
+      ]
+    }
+  }
+}
