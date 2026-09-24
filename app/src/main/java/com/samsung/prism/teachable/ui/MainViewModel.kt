@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-class MainViewModel(
+class MainViewModel @JvmOverloads constructor(
     application: Application,
     val repository: IWorkflowRepository = WorkflowRepository.create(application),
     val orchestrator: Orchestrator = Orchestrator(
