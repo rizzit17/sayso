@@ -11,3 +11,10 @@ captures
 .cxx
 *.apk
 *.aab
+
+# Eclipse / IDE metadata
+.settings/
+.project
+.classpath
+bin/
+app/bin/
