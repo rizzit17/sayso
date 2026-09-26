@@ -8,6 +8,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -111,10 +113,12 @@ fun SettingsScreen(
     val validationStatus by viewModel.validationStatus.collectAsState()
     val isValidating by viewModel.isValidating.collectAsState()
     val isA11yConnected by viewModel.isA11yConnected.collectAsState()
+    val availableModels by viewModel.availableModels.collectAsState()
 
     var inputKey by remember(savedApiKey) { mutableStateOf(savedApiKey) }
     var showKeyText by remember { mutableStateOf(false) }
     var testFeedback by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var customModelText by remember { mutableStateOf("") }
 
     val tabs = listOf("Your Gemini API Key", "System & Safety")
 
@@ -455,23 +459,46 @@ fun SettingsScreen(
                                 modifier = Modifier.padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Active Gemini Model",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = SaysoOnSurface
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .background(SaysoPrimaryContainer, RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    ) {
+                                        Text(
+                                            text = selectedModel,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SaysoOnPrimaryContainer
+                                        )
+                                    }
+                                }
+
                                 Text(
-                                    text = "Select Gemini Model",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp,
-                                    color = SaysoOnSurface
-                                )
-                                Text(
-                                    text = "Choose the Gemini model that fits your latency and reasoning needs. All models run zero-touch safety locally.",
+                                    text = "Select a model below. Testing your key will auto-discover all models supported by your account.",
                                     fontSize = 12.sp,
                                     color = SaysoOnSurfaceVariant
                                 )
 
+                                val allModels = (listOf(selectedModel) + availableModels + GeminiConfigStore.SUPPORTED_MODELS).distinct()
+
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    GeminiConfigStore.SUPPORTED_MODELS.forEach { model ->
+                                    allModels.forEach { model ->
                                         val isSelected = selectedModel == model
                                         FilterChip(
                                             selected = isSelected,
@@ -479,9 +506,11 @@ fun SettingsScreen(
                                             label = {
                                                 Text(
                                                     text = when (model) {
-                                                        "gemini-1.5-flash" -> "1.5 Flash (Fast)"
-                                                        "gemini-2.0-flash" -> "2.0 Flash"
-                                                        "gemini-1.5-pro" -> "1.5 Pro"
+                                                        "gemini-2.0-flash" -> "⚡ 2.0 Flash (Recommended)"
+                                                        "gemini-1.5-flash-latest" -> "1.5 Flash (Latest)"
+                                                        "gemini-1.5-flash" -> "1.5 Flash"
+                                                        "gemini-1.5-pro" -> "🧠 1.5 Pro"
+                                                        "gemini-2.5-flash" -> "🚀 2.5 Flash"
                                                         else -> model
                                                     },
                                                     fontSize = 11.sp,
@@ -493,6 +522,34 @@ fun SettingsScreen(
                                                 selectedLabelColor = SaysoOnPrimaryContainer
                                             )
                                         )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedTextField(
+                                        value = customModelText,
+                                        onValueChange = { customModelText = it },
+                                        placeholder = { Text("Or enter custom model name...", fontSize = 11.sp) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Button(
+                                        onClick = {
+                                            if (customModelText.isNotBlank()) {
+                                                val m = customModelText.trim()
+                                                viewModel.setModel(m)
+                                                customModelText = ""
+                                                Toast.makeText(context, "Model set to: $m", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        enabled = customModelText.isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = SaysoPrimary)
+                                    ) {
+                                        Text("Set", fontSize = 11.sp)
                                     }
                                 }
                             }

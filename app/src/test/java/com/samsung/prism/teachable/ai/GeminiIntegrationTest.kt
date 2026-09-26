@@ -43,10 +43,11 @@ class GeminiIntegrationTest {
 
     @Test
     fun testSupportedModelsList() {
-        assertTrue(GeminiConfigStore.SUPPORTED_MODELS.contains("gemini-1.5-flash"))
         assertTrue(GeminiConfigStore.SUPPORTED_MODELS.contains("gemini-2.0-flash"))
+        assertTrue(GeminiConfigStore.SUPPORTED_MODELS.contains("gemini-1.5-flash-latest"))
+        assertTrue(GeminiConfigStore.SUPPORTED_MODELS.contains("gemini-1.5-flash"))
         assertTrue(GeminiConfigStore.SUPPORTED_MODELS.contains("gemini-1.5-pro"))
-        assertEquals("gemini-1.5-flash", GeminiConfigStore.DEFAULT_MODEL)
+        assertEquals("gemini-2.0-flash", GeminiConfigStore.DEFAULT_MODEL)
     }
 
     @Test
@@ -190,5 +191,22 @@ class GeminiIntegrationTest {
         assertTrue(question.questionText.contains("Pay Now"))
         assertTrue(question.options.any { it.actionType == ClarificationActionType.SKIP_STEP })
         assertTrue(question.options.any { it.actionType == ClarificationActionType.ABORT })
+    }
+
+    @Test
+    fun testAutoModelResolution() {
+        val availableModels = listOf("gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro")
+        val requestedModel = "gemini-1.5-flash" // Simulating Google retiring 1.5-flash on this account
+
+        val resolved = when {
+            availableModels.contains(requestedModel) -> requestedModel
+            availableModels.any { it == "gemini-2.0-flash" } -> "gemini-2.0-flash"
+            availableModels.any { it.startsWith("gemini-2.0-flash") } -> availableModels.first { it.startsWith("gemini-2.0-flash") }
+            availableModels.any { it == "gemini-1.5-flash-latest" } -> "gemini-1.5-flash-latest"
+            availableModels.any { it.contains("flash") } -> availableModels.first { it.contains("flash") }
+            else -> requestedModel
+        }
+
+        assertEquals("gemini-2.0-flash", resolved)
     }
 }

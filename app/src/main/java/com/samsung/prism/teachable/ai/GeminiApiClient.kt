@@ -42,57 +42,168 @@ data class GeminiSchemaResult(
     val stepBindings: Map<Int, String> // step index (0-based) -> slot name
 )
 
+data class GeminiValidationResult(
+    val isSuccess: Boolean,
+    val message: String,
+    val activeModel: String,
+    val availableModels: List<String> = emptyList()
+)
+
 class GeminiApiClient(
     private val connectTimeoutMs: Int = 8000,
     private val readTimeoutMs: Int = 12000
 ) {
     private val tag = "GeminiApiClient"
-    private val baseUrl = "https://generativelanguage.googleapis.com/v1beta/models"
+    private val apiHost = "https://generativelanguage.googleapis.com"
+    private val apiVersions = listOf("v1beta", "v1")
 
     /**
-     * Tests the connection with the given API key and model by sending a ping prompt.
+     * Lists all models available to the given API key that support generateContent.
      */
-    suspend fun testConnection(
+    suspend fun fetchAvailableModels(apiKey: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        val trimmed = apiKey.trim()
+        if (trimmed.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("API Key cannot be blank"))
+        }
+
+        var lastError = "Could not list models"
+        for (version in apiVersions) {
+            val endpoint = "$apiHost/$version/models?key=$trimmed"
+            try {
+                val (statusCode, responseText) = executeGet(endpoint)
+                if (statusCode in 200..299) {
+                    val json = JSONObject(responseText)
+                    val modelsArr = json.optJSONArray("models") ?: continue
+                    val modelsList = mutableListOf<String>()
+                    for (i in 0 until modelsArr.length()) {
+                        val mObj = modelsArr.getJSONObject(i)
+                        val rawName = mObj.optString("name")
+                        val modelId = rawName.removePrefix("models/")
+                        val methods = mObj.optJSONArray("supportedGenerationMethods")
+                        var supportsGenerate = false
+                        if (methods != null) {
+                            for (j in 0 until methods.length()) {
+                                if (methods.optString(j) == "generateContent") {
+                                supportsGenerate = true
+                                break
+                            }
+                        }
+                    }
+                    if (supportsGenerate && modelId.isNotBlank()) {
+                        modelsList.add(modelId)
+                    }
+                }
+                if (modelsList.isNotEmpty()) {
+                    return@withContext Result.success(modelsList)
+                }
+            } else {
+                lastError = extractErrorMessage(responseText, statusCode)
+            }
+        } catch (e: Exception) {
+            lastError = e.message ?: "Connection error"
+        }
+    }
+
+    Result.failure(Exception(lastError))
+}
+
+    /**
+     * Tests connection by discovering available models and executing a test prompt.
+     * Automatically resolves to a valid, working model if the requested one is retired or renamed.
+     */
+    suspend fun testConnectionWithAutoModel(
         apiKey: String,
-        model: String = GeminiConfigStore.DEFAULT_MODEL
-    ): Result<String> = withContext(Dispatchers.IO) {
+        requestedModel: String = GeminiConfigStore.DEFAULT_MODEL
+    ): Result<GeminiValidationResult> = withContext(Dispatchers.IO) {
         val trimmedKey = apiKey.trim()
         if (trimmedKey.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("API Key cannot be blank"))
         }
 
-        try {
-            val endpoint = "$baseUrl/$model:generateContent?key=$trimmedKey"
-            val requestBody = JSONObject().apply {
-                val partsArray = JSONArray().apply {
-                    put(JSONObject().apply { put("text", "Respond strictly with the single word: OK") })
-                }
-                val contentsArray = JSONArray().apply {
-                    put(JSONObject().apply { put("parts", partsArray) })
-                }
-                put("contents", contentsArray)
-                put("generationConfig", JSONObject().apply {
-                    put("maxOutputTokens", 10)
-                    put("temperature", 0.0)
-                })
-            }
+        // 1. Discover models via ModelService.ListModels
+        val modelsResult = fetchAvailableModels(trimmedKey)
+        val availableModels = modelsResult.getOrNull() ?: emptyList()
 
-            val (statusCode, responseText) = executePost(endpoint, requestBody.toString())
-            if (statusCode in 200..299) {
-                val json = JSONObject(responseText)
-                val candidates = json.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    Result.success("Connection successful! Google Gemini is active.")
-                } else {
-                    Result.success("Connection verified (HTTP $statusCode).")
-                }
-            } else {
-                val errorMsg = extractErrorMessage(responseText, statusCode)
-                Result.failure(Exception(errorMsg))
+        if (modelsResult.isFailure && availableModels.isEmpty()) {
+            val err = modelsResult.exceptionOrNull()?.message ?: "Failed to reach Google Gemini API"
+            return@withContext Result.failure(Exception(err))
+        }
+
+        // 2. Resolve best working model
+        val resolvedModel = when {
+            availableModels.contains(requestedModel) -> requestedModel
+            availableModels.any { it == "gemini-2.0-flash" } -> "gemini-2.0-flash"
+            availableModels.any { it.startsWith("gemini-2.0-flash") } -> availableModels.first { it.startsWith("gemini-2.0-flash") }
+            availableModels.any { it == "gemini-1.5-flash-latest" } -> "gemini-1.5-flash-latest"
+            availableModels.any { it.contains("flash") } -> availableModels.first { it.contains("flash") }
+            availableModels.any { it.startsWith("gemini-1.5") } -> availableModels.first { it.startsWith("gemini-1.5") }
+            availableModels.isNotEmpty() -> availableModels.first()
+            else -> requestedModel
+        }
+
+        // 3. Ping the resolved model with generateContent
+        val testRequestBody = JSONObject().apply {
+            val partsArray = JSONArray().apply {
+                put(JSONObject().apply { put("text", "Respond strictly with the single word: OK") })
             }
-        } catch (e: Exception) {
-            Log.w(tag, "Gemini testConnection failed", e)
-            Result.failure(e)
+            val contentsArray = JSONArray().apply {
+                put(JSONObject().apply { put("parts", partsArray) })
+            }
+            put("contents", contentsArray)
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 10)
+                put("temperature", 0.0)
+            })
+        }
+
+        var pingSuccess = false
+        var lastPingError = ""
+
+        for (version in apiVersions) {
+            val endpoint = "$apiHost/$version/models/$resolvedModel:generateContent?key=$trimmedKey"
+            try {
+                val (statusCode, responseText) = executePost(endpoint, testRequestBody.toString())
+                if (statusCode in 200..299) {
+                    pingSuccess = true
+                    break
+                } else {
+                    lastPingError = extractErrorMessage(responseText, statusCode)
+                }
+            } catch (e: Exception) {
+                lastPingError = e.message ?: "Connection error"
+            }
+        }
+
+        if (pingSuccess) {
+            val note = if (resolvedModel != requestedModel) {
+                "Switched from '$requestedModel' to available '$resolvedModel'."
+            } else ""
+            val msg = "Connection successful! Active model: $resolvedModel. $note"
+            Result.success(
+                GeminiValidationResult(
+                    isSuccess = true,
+                    message = msg.trim(),
+                    activeModel = resolvedModel,
+                    availableModels = availableModels
+                )
+            )
+        } else {
+            Result.failure(Exception("Model $resolvedModel test failed: $lastPingError"))
+        }
+    }
+
+    /**
+     * Backward-compatible testConnection method.
+     */
+    suspend fun testConnection(
+        apiKey: String,
+        model: String = GeminiConfigStore.DEFAULT_MODEL
+    ): Result<String> {
+        val res = testConnectionWithAutoModel(apiKey, model)
+        return if (res.isSuccess) {
+            Result.success(res.getOrThrow().message)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Unknown error"))
         }
     }
 
@@ -141,7 +252,6 @@ class GeminiApiClient(
 
             val options = mutableListOf<ClarificationOption>()
 
-            // Find matching candidate node if recommended
             val matchedCandidate = context.visibleCandidates.firstOrNull {
                 suggestedAlt != null && (it.text?.contains(suggestedAlt, ignoreCase = true) == true)
             } ?: context.visibleCandidates.firstOrNull { !it.text.isNullOrBlank() }
@@ -313,7 +423,7 @@ class GeminiApiClient(
                 {
                   "matchedWorkflowId": "id-or-null",
                   "confidence": 0.95,
-                  "matchType": "EXACT" | "PARAPHRASE" | "GENERALIZED" | "UNKNOWN",
+                  "matchType": "EXACT" | "PARAPHRASE" | "GENERALIZED",
                   "extractedSlots": {
                     "slotName": "extractedValue"
                   },
@@ -362,8 +472,6 @@ class GeminiApiClient(
         prompt: String
     ): JSONObject? {
         val trimmedKey = apiKey.trim()
-        val endpoint = "$baseUrl/$model:generateContent?key=$trimmedKey"
-
         val requestBody = JSONObject().apply {
             val partsArray = JSONArray().apply {
                 put(JSONObject().apply { put("text", prompt) })
@@ -379,25 +487,33 @@ class GeminiApiClient(
             })
         }
 
-        val (statusCode, responseText) = executePost(endpoint, requestBody.toString())
-        if (statusCode !in 200..299) {
-            Log.w(tag, "Gemini API error ($statusCode): $responseText")
-            return null
+        for (version in apiVersions) {
+            val endpoint = "$apiHost/$version/models/$model:generateContent?key=$trimmedKey"
+            try {
+                val (statusCode, responseText) = executePost(endpoint, requestBody.toString())
+                if (statusCode in 200..299) {
+                    val json = JSONObject(responseText)
+                    val candidates = json.optJSONArray("candidates") ?: continue
+                    if (candidates.length() == 0) continue
+
+                    val candidate = candidates.getJSONObject(0)
+                    val content = candidate.optJSONObject("content") ?: continue
+                    val parts = content.optJSONArray("parts") ?: continue
+                    if (parts.length() == 0) continue
+
+                    val rawText = parts.getJSONObject(0).optString("text", "").trim()
+                    val cleanedText = cleanJsonMarkdown(rawText)
+
+                    val parsed = runCatching { JSONObject(cleanedText) }.getOrNull()
+                    if (parsed != null) return parsed
+                } else {
+                    Log.w(tag, "Gemini $version error ($statusCode): $responseText")
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Gemini call exception on $version", e)
+            }
         }
-
-        val json = JSONObject(responseText)
-        val candidates = json.optJSONArray("candidates") ?: return null
-        if (candidates.length() == 0) return null
-
-        val candidate = candidates.getJSONObject(0)
-        val content = candidate.optJSONObject("content") ?: return null
-        val parts = content.optJSONArray("parts") ?: return null
-        if (parts.length() == 0) return null
-
-        val rawText = parts.getJSONObject(0).optString("text", "").trim()
-        val cleanedText = cleanJsonMarkdown(rawText)
-
-        return runCatching { JSONObject(cleanedText) }.getOrNull()
+        return null
     }
 
     private fun cleanJsonMarkdown(text: String): String {
@@ -411,6 +527,27 @@ class GeminiApiClient(
             res = res.removeSuffix("```").trim()
         }
         return res
+    }
+
+    private fun executeGet(endpoint: String): Pair<Int, String> {
+        val url = URL(endpoint)
+        val conn = (url.openConnection() as HttpsURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
+            setRequestProperty("Accept", "application/json")
+        }
+
+        val statusCode = conn.responseCode
+        val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
+        val responseText = stream?.let {
+            BufferedReader(InputStreamReader(it, "UTF-8")).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+
+        conn.disconnect()
+        return Pair(statusCode, responseText)
     }
 
     private fun executePost(endpoint: String, jsonBody: String): Pair<Int, String> {

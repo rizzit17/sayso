@@ -25,10 +25,15 @@ class GenAiManager(
     val isGenAiActive: Boolean
         get() = configStore.hasValidKey()
 
-    suspend fun testKey(key: String, model: String = configStore.selectedModel): Result<String> {
-        val result = apiClient.testConnection(key, model)
+    suspend fun testKey(key: String, model: String = configStore.selectedModel): Result<GeminiValidationResult> {
+        val result = apiClient.testConnectionWithAutoModel(key, model)
         if (result.isSuccess) {
-            configStore.lastValidationStatus = "Valid (${model})"
+            val valResult = result.getOrThrow()
+            configStore.selectedModel = valResult.activeModel
+            if (valResult.availableModels.isNotEmpty()) {
+                configStore.cachedAvailableModels = valResult.availableModels
+            }
+            configStore.lastValidationStatus = "Valid (${valResult.activeModel})"
             configStore.lastValidationTimestamp = System.currentTimeMillis()
         } else {
             val err = result.exceptionOrNull()?.message ?: "Validation failed"

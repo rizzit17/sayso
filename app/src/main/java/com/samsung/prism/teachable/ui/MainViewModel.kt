@@ -181,6 +181,10 @@ class MainViewModel @JvmOverloads constructor(
         _isGenAiEnabled.value = enabled
     }
 
+    // Available Gemini Models for UI Chips
+    private val _availableModels = MutableStateFlow(geminiConfigStore.cachedAvailableModels)
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
     fun testGeminiApiKey(key: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
             _isValidating.value = true
@@ -188,9 +192,13 @@ class MainViewModel @JvmOverloads constructor(
             val result = genAiManager.testKey(trimmed, _selectedModel.value)
             _isValidating.value = false
             if (result.isSuccess) {
-                val msg = result.getOrNull() ?: "Success"
-                _validationStatus.value = "Connected"
-                onResult(true, msg)
+                val validation = result.getOrThrow()
+                _selectedModel.value = validation.activeModel
+                if (validation.availableModels.isNotEmpty()) {
+                    _availableModels.value = validation.availableModels
+                }
+                _validationStatus.value = "Connected (${validation.activeModel})"
+                onResult(true, validation.message)
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Validation failed"
                 _validationStatus.value = "Error: $err"

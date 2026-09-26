@@ -19,6 +19,18 @@ class GeminiConfigStore(context: Context) {
             prefs.edit().putString(KEY_SELECTED_MODEL, value.trim()).apply()
         }
 
+    var cachedAvailableModels: List<String>
+        get() {
+            val str = prefs.getString(KEY_CACHED_MODELS, null) ?: return SUPPORTED_MODELS
+            return str.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .ifEmpty { SUPPORTED_MODELS }
+        }
+        set(value) {
+            prefs.edit().putString(KEY_CACHED_MODELS, value.joinToString(",")).apply()
+        }
+
     var isGenAiEnabled: Boolean
         get() = prefs.getBoolean(KEY_GEN_AI_ENABLED, true)
         set(value) {
@@ -45,6 +57,7 @@ class GeminiConfigStore(context: Context) {
     fun clearKey() {
         prefs.edit()
             .remove(KEY_API_KEY)
+            .remove(KEY_CACHED_MODELS)
             .putString(KEY_LAST_VALIDATION_STATUS, "Key Cleared")
             .putLong(KEY_LAST_VALIDATION_TIME, System.currentTimeMillis())
             .apply()
@@ -60,15 +73,18 @@ class GeminiConfigStore(context: Context) {
         private const val PREFS_NAME = "sayso_gemini_config"
         private const val KEY_API_KEY = "gemini_api_key"
         private const val KEY_SELECTED_MODEL = "gemini_selected_model"
+        private const val KEY_CACHED_MODELS = "gemini_cached_models"
         private const val KEY_GEN_AI_ENABLED = "gemini_gen_ai_enabled"
         private const val KEY_LAST_VALIDATION_STATUS = "gemini_last_val_status"
         private const val KEY_LAST_VALIDATION_TIME = "gemini_last_val_time"
 
-        const val DEFAULT_MODEL = "gemini-1.5-flash"
+        const val DEFAULT_MODEL = "gemini-2.0-flash"
         val SUPPORTED_MODELS = listOf(
-            "gemini-1.5-flash",
             "gemini-2.0-flash",
-            "gemini-1.5-pro"
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-2.5-flash"
         )
     }
 }
