@@ -21,16 +21,7 @@ object UiTreeCapture {
             null
         } ?: return UiSnapshot.EMPTY
 
-        return try {
-            captureFromNodeInfo(root)
-        } finally {
-            try {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                    root.recycle()
-                }
-            } catch (_: Exception) {
-            }
-        }
+        return captureFromNodeInfo(root)
     }
 
     /**
@@ -81,12 +72,6 @@ object UiTreeCapture {
                     val childNode = walkNode(childInfo, depth + 1, currentDesc, tempRect)
                     if (childNode != null) {
                         children.add(childNode)
-                    }
-                    try {
-                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                            childInfo.recycle()
-                        }
-                    } catch (_: Exception) {
                     }
                 }
             }

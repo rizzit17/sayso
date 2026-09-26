@@ -33,6 +33,9 @@ class SpeechToText(
     private val _partialText = MutableStateFlow("")
     val partialText: StateFlow<String> = _partialText.asStateFlow()
 
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
     private var speechRecognizer: SpeechRecognizer? = null
 
     init {
@@ -53,8 +56,12 @@ class SpeechToText(
         }
     }
 
-    fun startListening() {
+    private var hasRetriedFallbackLanguage = false
+
+    fun startListening(fallbackToUsLocale: Boolean = false) {
         if (_state.value == VoiceInputState.LISTENING) return
+
+        _errorMessage.value = null
 
         if (speechRecognizer == null) {
             initRecognizer()
@@ -62,6 +69,7 @@ class SpeechToText(
 
         if (speechRecognizer == null) {
             Log.w(tag, "SpeechRecognizer unavailable, falling back to IDLE")
+            _errorMessage.value = "Speech recognition service is unavailable on this device. Please type your command below."
             _state.value = VoiceInputState.ERROR
             return
         }
@@ -69,7 +77,11 @@ class SpeechToText(
         try {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                if (fallbackToUsLocale) {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                } else {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                }
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             }
@@ -78,6 +90,7 @@ class SpeechToText(
             _partialText.value = ""
         } catch (e: Exception) {
             Log.e(tag, "Error starting speech recognition: ${e.message}")
+            _errorMessage.value = "Failed to start speech recognition: ${e.localizedMessage ?: e.message}"
             _state.value = VoiceInputState.ERROR
         }
     }
@@ -148,6 +161,34 @@ class SpeechToText(
 
             override fun onError(error: Int) {
                 Log.w(tag, "Speech recognition error code: $error")
+
+                // Auto-retry once with en-US if language pack error (12 or 13)
+                if ((error == 12 || error == 13) && !hasRetriedFallbackLanguage) {
+                    hasRetriedFallbackLanguage = true
+                    Log.i(tag, "Retrying speech recognition with default en-US fallback locale...")
+                    scope.launch {
+                        _state.value = VoiceInputState.IDLE
+                        startListening(fallbackToUsLocale = true)
+                    }
+                    return
+                }
+
+                hasRetriedFallbackLanguage = false
+                val friendlyMsg = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                    SpeechRecognizer.ERROR_CLIENT -> "Speech client error. Speech service may not be available on this device"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission required"
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network error during speech recognition"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized. Try speaking clearly or typing below"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognizer is busy, please try again"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
+                    SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> "Too many speech requests. Try again"
+                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "Speech server disconnected"
+                    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "Speech language not supported. Try typing command below"
+                    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Language pack unavailable on device. Try typing command below or download language pack in Android settings"
+                    else -> "Speech recognition error (code $error). Try typing command below"
+                }
+                _errorMessage.value = friendlyMsg
                 _state.value = VoiceInputState.ERROR
             }
 

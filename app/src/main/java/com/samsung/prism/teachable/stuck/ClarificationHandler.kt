@@ -47,7 +47,7 @@ class ClarificationHandler {
                     return ClarificationResult.ResumeWithNode(opt.targetNode)
                 }
 
-                // Keyword overlap (e.g. "Indiranagar" matching "Domino's Pizza (Indiranagar)")
+                // Keyword overlap (e.g. spoken location or modifier matching candidate label)
                 val optWords = (nodeText + " " + labelText).split(Regex("[^a-zA-Z0-9]+"))
                     .filter { it.length >= 3 && it !in stopWords }
                 if (spokenWords.any { sw -> optWords.any { ow -> sw == ow || ow.contains(sw) || sw.contains(ow) } }) {

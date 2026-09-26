@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -38,7 +38,7 @@ fun RunOutcomePill(
     val config = when (status) {
         RunStatus.COMPLETED -> OutcomeConfig("Completed", SaysoSuccessContainer, SaysoSuccess, Icons.Default.Check)
         RunStatus.COMPLETED_TO_BOUNDARY -> OutcomeConfig("Payment Handoff", CredentialHandoffContainer, CredentialHandoffText, Icons.Default.Security)
-        RunStatus.ASKED_USER -> OutcomeConfig("Asked User", SaysoTertiaryContainer, SaysoOnTertiaryContainer, Icons.Default.HelpOutline)
+        RunStatus.ASKED_USER -> OutcomeConfig("Asked User", SaysoTertiaryContainer, SaysoOnTertiaryContainer, Icons.AutoMirrored.Filled.HelpOutline)
         RunStatus.FAILED -> OutcomeConfig("Failed", SaysoErrorContainer, SaysoOnErrorContainer, Icons.Default.Close)
         RunStatus.CANCELLED -> OutcomeConfig("Cancelled", SaysoErrorContainer, SaysoOnErrorContainer, Icons.Default.Close)
     }

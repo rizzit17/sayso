@@ -1,5 +1,6 @@
 package com.samsung.prism.teachable.retrieval
 
+import com.samsung.prism.teachable.ai.GenAiManager
 import com.samsung.prism.teachable.model.Workflow
 import com.samsung.prism.teachable.storage.IWorkflowRepository
 import com.samsung.prism.teachable.voice.IntentMatchResult
@@ -14,7 +15,8 @@ class WorkflowRetriever(
         confidenceHigh = 0.80,
         confidenceLow = 0.45,
         ambiguityDelta = 0.10
-    )
+    ),
+    val genAiManager: GenAiManager? = null
 ) {
 
     suspend fun retrieve(
@@ -34,17 +36,23 @@ class WorkflowRetriever(
             return retrieveWithEmbeddings(trimmed, queryEmbedding, activeWorkflows)
         }
 
-        // Offline / fallback token and edit-distance matching
-        return when (val match = intentMatcher.match(trimmed, activeWorkflows)) {
+        // GenAI or offline fallback token and edit-distance matching
+        val matchResult = if (genAiManager?.isGenAiActive == true) {
+            genAiManager.matchIntent(trimmed, activeWorkflows)
+        } else {
+            intentMatcher.match(trimmed, activeWorkflows)
+        }
+
+        return when (matchResult) {
             is IntentMatchResult.Matched -> {
                 RetrievalResult.Selected(
-                    workflow = match.workflow,
-                    confidence = match.confidence,
-                    matchType = match.matchType
+                    workflow = matchResult.workflow,
+                    confidence = matchResult.confidence,
+                    matchType = matchResult.matchType
                 )
             }
             is IntentMatchResult.Ambiguous -> {
-                val candidates = match.candidates.map {
+                val candidates = matchResult.candidates.map {
                     WorkflowCandidate(workflow = it.first, confidence = it.second)
                 }
                 RetrievalResult.Ambiguous(candidates)

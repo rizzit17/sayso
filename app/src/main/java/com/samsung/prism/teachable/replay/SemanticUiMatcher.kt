@@ -28,8 +28,12 @@ class SemanticUiMatcher(
         val allNodes = snapshot.allNodes
         if (allNodes.isEmpty()) return null
 
+        val rootBounds = snapshot.rootNode?.bounds
+        val sw = if (rootBounds != null && rootBounds.width > 0) rootBounds.width else 1080
+        val sh = if (rootBounds != null && rootBounds.height > 0) rootBounds.height else 2400
+
         val candidates = allNodes.map { node ->
-            scoreNode(target, node, snapshot.screenSignature)
+            scoreNode(target, node, snapshot.screenSignature, sw, sh)
         }.sortedDescending() // Uses MatchCandidate compareTo with tie-breaking
 
         val best = candidates.firstOrNull() ?: return null
@@ -39,7 +43,9 @@ class SemanticUiMatcher(
     fun scoreNode(
         target: StepTarget,
         candidate: UiNode,
-        currentScreenSig: String? = null
+        currentScreenSig: String? = null,
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400
     ): MatchCandidate {
         val signals = mutableMapOf<String, Double>()
 
@@ -72,7 +78,7 @@ class SemanticUiMatcher(
         signals["w7_scroll"] = s7 * w7
 
         // w8: Normalized center distance (0.02)
-        val s8 = computeCenterDistanceScore(target, candidate)
+        val s8 = computeCenterDistanceScore(target, candidate, screenWidth, screenHeight)
         signals["w8_coordinates"] = s8 * w8
 
         val totalScore = signals.values.sum()
@@ -195,11 +201,16 @@ class SemanticUiMatcher(
         return 0.5
     }
 
-    private fun computeCenterDistanceScore(target: StepTarget, cand: UiNode): Double {
+    private fun computeCenterDistanceScore(
+        target: StepTarget,
+        cand: UiNode,
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400
+    ): Double {
         val tx = target.boundsRelativeX ?: return 0.5
         val ty = target.boundsRelativeY ?: return 0.5
 
-        val (cx, cy) = cand.bounds.normalizedCenter(1080, 2400)
+        val (cx, cy) = cand.bounds.normalizedCenter(screenWidth, screenHeight)
 
         val dx = (tx - cx).toDouble()
         val dy = (ty - cy).toDouble()

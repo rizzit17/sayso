@@ -15,7 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -273,7 +273,7 @@ fun LearningReviewDialog(
                                 color = SaysoSecondary
                             )
                             Text(
-                                text = "You can speak altered items (e.g. \"Order Farmhouse pizza\") and Sayso will bind the parameters automatically!",
+                                text = "You can speak altered parameters (e.g. different items, dates, or destinations) and Sayso will bind them automatically!",
                                 fontSize = 11.sp,
                                 color = SaysoOnSurfaceVariant,
                                 lineHeight = 15.sp
@@ -291,7 +291,7 @@ fun LearningReviewDialog(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.AltRoute,
+                                imageVector = Icons.AutoMirrored.Filled.AltRoute,
                                 contentDescription = null,
                                 tint = SaysoPrimary,
                                 modifier = Modifier.size(18.dp)

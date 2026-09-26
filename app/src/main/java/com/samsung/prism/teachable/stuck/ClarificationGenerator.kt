@@ -1,6 +1,17 @@
 package com.samsung.prism.teachable.stuck
 
-class ClarificationGenerator {
+import com.samsung.prism.teachable.ai.GenAiManager
+
+class ClarificationGenerator(
+    private val genAiManager: GenAiManager? = null
+) {
+
+    suspend fun generateQuestionSuspend(context: StuckContext): ClarificationQuestion {
+        if (genAiManager?.isGenAiActive == true) {
+            return genAiManager.generateStuckClarification(context)
+        }
+        return generateQuestion(context)
+    }
 
     fun generateQuestion(context: StuckContext): ClarificationQuestion {
         val targetLabel = context.step.target.text
@@ -61,3 +72,4 @@ class ClarificationGenerator {
         )
     }
 }
+

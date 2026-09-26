@@ -31,9 +31,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.compose.material.icons.filled.Settings
 import com.samsung.prism.teachable.ui.screens.HomeScreen
 import com.samsung.prism.teachable.ui.screens.LearnedFlowsScreen
 import com.samsung.prism.teachable.ui.screens.RunHistoryScreen
+import com.samsung.prism.teachable.ui.screens.SettingsScreen
 import com.samsung.prism.teachable.ui.screens.WorkflowDetailScreen
 import com.samsung.prism.teachable.ui.theme.PrismTheme
 import com.samsung.prism.teachable.ui.theme.SaysoOnPrimaryContainer
@@ -47,6 +49,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     data object Home : Screen("home", "Home", Icons.Default.Home)
     data object Workflows : Screen("workflows", "Flows", Icons.Default.AutoMode)
     data object History : Screen("history", "History", Icons.Default.History)
+    data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
 class MainActivity : ComponentActivity() {
@@ -70,7 +73,8 @@ fun MainAppContent(viewModel: MainViewModel = viewModel()) {
     val bottomNavItems = listOf(
         Screen.Home,
         Screen.Workflows,
-        Screen.History
+        Screen.History,
+        Screen.Settings
     )
 
     Scaffold(
@@ -128,6 +132,9 @@ fun MainAppContent(viewModel: MainViewModel = viewModel()) {
                     viewModel = viewModel,
                     onNavigateToWorkflowDetail = { id ->
                         navController.navigate("workflow_detail/$id")
+                    },
+                    onNavigateToSettings = {
+                        navController.navigate(Screen.Settings.route)
                     }
                 )
             }
@@ -143,6 +150,10 @@ fun MainAppContent(viewModel: MainViewModel = viewModel()) {
 
             composable(Screen.History.route) {
                 RunHistoryScreen(viewModel = viewModel)
+            }
+
+            composable(Screen.Settings.route) {
+                SettingsScreen(viewModel = viewModel)
             }
 
             composable(

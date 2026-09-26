@@ -37,7 +37,6 @@ class ActionExecutor(
         val a11yNode = findA11yNode(service, target)
         if (a11yNode != null) {
             val clicked = a11yNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            a11yNode.recycle()
             if (clicked) {
                 lastActionTimestamp = System.currentTimeMillis()
                 return true
@@ -72,7 +71,6 @@ class ActionExecutor(
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         val success = a11yNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        a11yNode.recycle()
         if (success) {
             lastActionTimestamp = System.currentTimeMillis()
         }
@@ -92,7 +90,6 @@ class ActionExecutor(
                 AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             }
             val success = a11yNode.performAction(action)
-            a11yNode.recycle()
             if (success) {
                 lastActionTimestamp = System.currentTimeMillis()
                 return true

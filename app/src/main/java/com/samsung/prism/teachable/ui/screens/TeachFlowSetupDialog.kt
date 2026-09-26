@@ -80,8 +80,7 @@ fun TeachFlowSetupDialog(
     onDismiss: () -> Unit,
     onStartTeaching: (utterance: String, targetPackage: String?) -> Unit
 ) {
-    var utteranceInput by remember { mutableStateOf("Order a Margherita pizza from Domino's on Zomato") }
-    var targetPackage by remember { mutableStateOf("com.application.zomato") }
+    var utteranceInput by remember { mutableStateOf("") }
 
     val infiniteTransition = rememberInfiniteTransition(label = "wave")
     val waveScale1 by infiniteTransition.animateFloat(
@@ -233,6 +232,7 @@ fun TeachFlowSetupDialog(
                             onValueChange = { utteranceInput = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("Spoken Goal") },
+                            placeholder = { Text("e.g. Toggle Airplane Mode in Settings") },
                             shape = SubCardShape,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = SaysoPrimary,
@@ -242,6 +242,56 @@ fun TeachFlowSetupDialog(
                             )
                         )
                     }
+                }
+
+                val lowerInput = utteranceInput.lowercase()
+
+                // Dynamic platform / app name extraction from preposition ("on <App>", "in <App>", etc.)
+                val platformMatch = Regex(
+                    "(?:on|in|using|via|app)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:and|with|to|deliver|for)|$)",
+                    RegexOption.IGNORE_CASE
+                ).find(utteranceInput)
+                val extractedApp = platformMatch?.groupValues?.get(1)?.trim()?.replaceFirstChar { it.uppercase() }
+
+                val (detectedAppName, detectedPkg) = when {
+                    lowerInput.contains("setting") || lowerInput.contains("airplane") || lowerInput.contains("wifi") || lowerInput.contains("bluetooth") ->
+                        Pair("System Settings", "com.android.settings")
+                    !extractedApp.isNullOrBlank() && !extractedApp.equals("the", ignoreCase = true) ->
+                        Pair(extractedApp, null)
+                    else ->
+                        Pair("Auto-detected during demonstration", null)
+                }
+
+                // Dynamic parameter extraction for real-time live preview
+                val detectedParams = mutableListOf<Pair<String, String>>()
+
+                // 1. Store / Merchant
+                val storeMatch = Regex("(?:from|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|to|deliver)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
+                storeMatch?.groupValues?.get(1)?.trim()?.let {
+                    if (it.isNotBlank() && !it.equals(extractedApp, ignoreCase = true)) {
+                        detectedParams.add(Pair("Store", it.replaceFirstChar { c -> c.uppercase() }))
+                    }
+                }
+
+                // 2. Item / Core entity
+                val itemMatch = Regex("(?:order|get|buy|search\\s+for|find|send|play|open)\\s+(?:(?:a|an|the)\\s+)?([a-zA-Z0-9'\\s]+?)(?:\\s+(?:from|at|on|in|to)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
+                itemMatch?.groupValues?.get(1)?.trim()?.let {
+                    if (it.isNotBlank() && it.length > 1 && !it.equals(extractedApp, ignoreCase = true)) {
+                        detectedParams.add(Pair("Item", it.replaceFirstChar { c -> c.uppercase() }))
+                    }
+                }
+
+                // 3. Destination / Address
+                val destMatch = Regex("(?:to|deliver\\s+to|send\\s+to)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|from)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
+                destMatch?.groupValues?.get(1)?.trim()?.let {
+                    if (it.isNotBlank() && !it.equals(extractedApp, ignoreCase = true)) {
+                        detectedParams.add(Pair("To", it.replaceFirstChar { c -> c.uppercase() }))
+                    }
+                }
+
+                // 4. Platform / App
+                if (!extractedApp.isNullOrBlank() && !extractedApp.equals("the", ignoreCase = true)) {
+                    detectedParams.add(Pair("App", extractedApp))
                 }
 
                 // Detected target parameters preview
@@ -266,21 +316,31 @@ fun TeachFlowSetupDialog(
                                 color = SaysoOnSurface
                             )
                         }
-                        Text(
-                            text = "3 dynamic slots",
-                            fontSize = 11.sp,
-                            color = SaysoOnSurfaceVariant
-                        )
                     }
 
-                    // Chips
+                    // Dynamic Chips
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        ParamPill("Store", "Domino's", SaysoPrimaryFixed, SaysoPrimary)
-                        ParamPill("Item", "Margherita", SaysoSecondaryContainer, SaysoSecondary)
-                        ParamPill("App", "Zomato", SaysoTertiaryContainer, SaysoPrimary)
+                        if (detectedParams.isNotEmpty()) {
+                            for ((paramLabel, paramVal) in detectedParams.take(3)) {
+                                val (bg, fg) = when (paramLabel) {
+                                    "Store" -> Pair(SaysoPrimaryFixed, SaysoPrimary)
+                                    "Item" -> Pair(SaysoSecondaryContainer, SaysoSecondary)
+                                    "App" -> Pair(SaysoTertiaryContainer, SaysoPrimary)
+                                    else -> Pair(SaysoSecondaryContainer, SaysoSecondary)
+                                }
+                                ParamPill(paramLabel, paramVal, bg, fg)
+                            }
+                        } else {
+                            ParamPill(
+                                "Action",
+                                if (utteranceInput.isBlank()) "Describe task above" else utteranceInput.trim(),
+                                SaysoSecondaryContainer,
+                                SaysoSecondary
+                            )
+                        }
                     }
                 }
 
@@ -314,7 +374,7 @@ fun TeachFlowSetupDialog(
                             color = SaysoOnSurfaceVariant
                         )
                         Text(
-                            text = "Zomato • Food Delivery",
+                            text = detectedAppName,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = SaysoOnSurface
@@ -331,9 +391,10 @@ fun TeachFlowSetupDialog(
                 Button(
                     onClick = {
                         if (utteranceInput.isNotBlank()) {
-                            onStartTeaching(utteranceInput.trim(), targetPackage)
+                            onStartTeaching(utteranceInput.trim(), detectedPkg)
                         }
                     },
+                    enabled = utteranceInput.isNotBlank(),
                     shape = PillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SaysoPrimary,

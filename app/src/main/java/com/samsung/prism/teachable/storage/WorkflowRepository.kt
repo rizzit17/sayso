@@ -2,6 +2,7 @@ package com.samsung.prism.teachable.storage
 
 import android.content.Context
 import com.samsung.prism.teachable.model.ExpectedStateTransition
+import com.samsung.prism.teachable.model.SlotDefinition
 import com.samsung.prism.teachable.model.SlotSchema
 import com.samsung.prism.teachable.model.StepTarget
 import com.samsung.prism.teachable.model.Workflow

@@ -1,7 +1,13 @@
 package com.samsung.prism.teachable.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -27,14 +33,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.LocalPizza
-import androidx.compose.material.icons.filled.LocalTaxi
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -43,7 +48,6 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.TipsAndUpdates
 import androidx.compose.material.icons.filled.Tune
@@ -122,7 +126,8 @@ import com.samsung.prism.teachable.voice.VoiceInputState
 fun HomeScreen(
     viewModel: MainViewModel,
     onNavigateToWorkflowDetail: (String) -> Unit,
-    onNavigateToFlowsList: () -> Unit = {}
+    onNavigateToFlowsList: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val isA11yConnected by viewModel.isA11yConnected.collectAsState()
@@ -134,12 +139,27 @@ fun HomeScreen(
     val boundaryAlert by viewModel.boundaryNotification.collectAsState()
     val stuckQuestion by viewModel.stuckClarification.collectAsState()
     val voiceState by viewModel.voiceInputState.collectAsState()
+    val speechError by viewModel.speechErrorMessage.collectAsState()
     val recentRuns by viewModel.recentRuns.collectAsState()
     val activeSession by viewModel.currentTeachingSession.collectAsState()
 
     var manualTextInput by remember { mutableStateOf("") }
     var showTeachSetupDialog by remember { mutableStateOf(false) }
     var reviewWorkflow by remember { mutableStateOf<Workflow?>(null) }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.startListening()
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission is required for voice commands.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val auraScale1 by infiniteTransition.animateFloat(
@@ -205,22 +225,42 @@ fun HomeScreen(
                         }
                     }
 
-                    // A11y Settings Action Button
-                    IconButton(
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(SaysoSurfaceContainer, CircleShape)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = "Accessibility Settings",
-                            tint = SaysoOnSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        // Gemini Settings Action Button
+                        IconButton(
+                            onClick = onNavigateToSettings,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(SaysoPrimaryContainer, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Gemini Settings",
+                                tint = SaysoOnPrimaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // A11y Settings Action Button
+                        IconButton(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(SaysoSurfaceContainer, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Accessibility Settings",
+                                tint = SaysoOnSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
 
@@ -229,6 +269,47 @@ fun HomeScreen(
                     state = replayState,
                     isA11yConnected = isA11yConnected
                 )
+
+                // Accessibility Service OFF Banner
+                if (!isA11yConnected) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SaysoTertiaryContainer),
+                        shape = CardShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Accessibility Service is OFF",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = SaysoOnTertiaryContainer
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "SaySo requires Automation Accessibility Service enabled to run workflows and automate actions.",
+                                    fontSize = 12.sp,
+                                    color = SaysoOnTertiaryContainer.copy(alpha = 0.85f),
+                                    lineHeight = 16.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    context.startActivity(intent)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SaysoTertiary)
+                            ) {
+                                Text("Enable", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -290,7 +371,16 @@ fun HomeScreen(
                                 if (voiceState == VoiceInputState.LISTENING) {
                                     viewModel.stopListening()
                                 } else {
-                                    viewModel.startListening()
+                                    val hasPermission = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+
+                                    if (hasPermission) {
+                                        viewModel.startListening()
+                                    } else {
+                                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                 }
                             },
                         contentAlignment = Alignment.Center
@@ -308,12 +398,18 @@ fun HomeScreen(
                 Text(
                     text = when {
                         voiceState == VoiceInputState.LISTENING -> "Listening for intent..."
+                        voiceState == VoiceInputState.ERROR && speechError != null -> speechError!!
+                        voiceState == VoiceInputState.ERROR -> "Speech input error. Please type command below."
                         replayState != ReplayState.IDLE -> statusMsg
                         else -> "Tap to speak or teach"
                     },
                     fontSize = 14.sp,
-                    fontWeight = if (voiceState == VoiceInputState.LISTENING) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (voiceState == VoiceInputState.LISTENING) SaysoSecondary else SaysoOnSurfaceVariant
+                    fontWeight = if (voiceState == VoiceInputState.LISTENING || voiceState == VoiceInputState.ERROR) FontWeight.SemiBold else FontWeight.Medium,
+                    color = when {
+                        voiceState == VoiceInputState.LISTENING -> SaysoSecondary
+                        voiceState == VoiceInputState.ERROR -> Color(0xFFD32F2F)
+                        else -> SaysoOnSurfaceVariant
+                    }
                 )
 
                 // Teach Quick Action Pill Button
@@ -355,7 +451,7 @@ fun HomeScreen(
                     onValueChange = { manualTextInput = it },
                     placeholder = {
                         Text(
-                            text = "Type utterance (e.g. Order Margherita pizza)",
+                            text = "Type voice command or prompt...",
                             fontSize = 12.sp,
                             color = SaysoOutline
                         )
@@ -383,7 +479,7 @@ fun HomeScreen(
                         .background(SaysoPrimary, CircleShape)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Send,
+                        imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Run",
                         tint = SaysoOnPrimary,
                         modifier = Modifier.size(18.dp)
@@ -480,7 +576,7 @@ fun HomeScreen(
                             color = SaysoPrimary
                         )
                         Icon(
-                            imageVector = Icons.Default.KeyboardArrowRight,
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = null,
                             tint = SaysoPrimary,
                             modifier = Modifier.size(16.dp)
@@ -522,9 +618,9 @@ fun HomeScreen(
                     ) {
                         for ((index, wf) in workflows.take(5).withIndex()) {
                             val (catIcon, catBg, catText) = when (index % 3) {
-                                0 -> Triple(Icons.Default.LocalPizza, SaysoTertiaryFixed, SaysoOnTertiaryFixed)
-                                1 -> Triple(Icons.Default.LocalTaxi, SaysoSecondaryFixed, SaysoOnSecondaryFixed)
-                                else -> Triple(Icons.Default.Coffee, SaysoPrimaryFixed, SaysoOnPrimaryContainer)
+                                0 -> Triple(Icons.Default.PlayArrow, SaysoTertiaryFixed, SaysoOnTertiaryFixed)
+                                1 -> Triple(Icons.Default.AutoFixHigh, SaysoSecondaryFixed, SaysoOnSecondaryFixed)
+                                else -> Triple(Icons.Default.TipsAndUpdates, SaysoPrimaryFixed, SaysoOnPrimaryContainer)
                             }
 
                             Card(
@@ -580,7 +676,7 @@ fun HomeScreen(
                                             maxLines = 1
                                         )
                                         Text(
-                                            text = wf.supportedPackages.firstOrNull() ?: "Zomato",
+                                            text = wf.supportedPackages.firstOrNull() ?: wf.intentTag.ifBlank { "Taught Workflow" },
                                             fontSize = 11.sp,
                                             color = SaysoOnSurfaceVariant
                                         )
@@ -774,7 +870,7 @@ fun HomeScreen(
                         letterSpacing = 1.sp
                     )
                     Text(
-                        text = "Try saying: \"Order Farmhouse pizza from Domino's\"",
+                        text = "Speak any taught voice command or tap + to teach a new flow",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = SaysoPrimary

@@ -13,8 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.TouchApp
@@ -84,7 +84,7 @@ fun ClarificationCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.HelpOutline,
+                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
                         contentDescription = null,
                         tint = SaysoOnTertiaryContainer,
                         modifier = Modifier.size(16.dp)

@@ -17,7 +17,7 @@ class SlotExtractor {
         val lower = utterance.lowercase().trim()
 
         for (slot in workflow.slotSchema.slots) {
-            val extracted = extractSingleSlot(slot, lower, utterance)
+            val extracted = extractSingleSlot(slot, lower, utterance, workflow.slotSchema)
             if (extracted != null) {
                 bound[slot.name] = extracted
             } else if (slot.defaultValue != null) {
@@ -37,14 +37,14 @@ class SlotExtractor {
     private fun extractSingleSlot(
         slot: SlotDefinition,
         lower: String,
-        rawUtterance: String
+        rawUtterance: String,
+        schema: com.samsung.prism.teachable.model.SlotSchema? = null
     ): Any? {
-        // 1. Enum slots (e.g. platform: Zomato, Swiggy; address: Home, Work)
+        // 1. Enum slots (e.g. platform, address, category enums)
         if (slot.type == "enum" && !slot.enumValues.isNullOrEmpty()) {
-            for (enumVal in slot.enumValues) {
-                if (lower.contains(enumVal.lowercase())) {
-                    return enumVal
-                }
+            val matched = matchEnumSynonym(lower, slot.enumValues)
+            if (matched != null) {
+                return matched
             }
         }
 
@@ -63,28 +63,34 @@ class SlotExtractor {
             }
         }
 
-        // 3. Restaurant slot
-        if (slot.name == "restaurant") {
+        // 3. Restaurant / Store / Source slot
+        if (slot.name == "restaurant" || slot.name == "store" || slot.name == "merchant") {
             val restaurantRegex = Regex(
-                "(?:from|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|app|to)|$)",
+                "(?:from|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|app|to|deliver)|$)",
                 RegexOption.IGNORE_CASE
             )
             val match = restaurantRegex.find(rawUtterance)
             if (match != null) {
                 val candidate = match.groupValues[1].trim()
-                if (candidate.isNotEmpty() && !candidate.equals("zomato", ignoreCase = true) && !candidate.equals("swiggy", ignoreCase = true)) {
+                val isPlatformName = schema?.slots?.any { otherSlot ->
+                    otherSlot.name == "platform" && (
+                        otherSlot.defaultValue.equals(candidate, ignoreCase = true) ||
+                        otherSlot.enumValues.any { it.equals(candidate, ignoreCase = true) }
+                    )
+                } ?: false
+
+                if (candidate.isNotEmpty() && !isPlatformName) {
                     return candidate
                 }
             }
-            if (lower.contains("domino")) return "Domino's"
-            if (lower.contains("subway")) return "Subway"
-            if (lower.contains("burger king")) return "Burger King"
-            if (lower.contains("mcdonald")) return "McDonald's"
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
         }
 
         // 4. Item / Search term slot
         if (slot.name == "item" || slot.name == "search_term") {
-            // E.g. "Order Farmhouse pizza from Domino's" or "Buy Sony headphones on Amazon"
             val itemRegexList = listOf(
                 Regex(
                     "(?:order|get|buy|want)\\s+(?:(?:a|an|one|two|three|four|five|\\d+)\\s+)?([a-zA-Z0-9'\\s]+?)(?:\\s+(?:from|at|on|using|to)|$)",
@@ -112,12 +118,49 @@ class SlotExtractor {
             }
         }
 
-        // 5. Address slot
-        if (slot.name == "address") {
-            if (lower.contains("work") || lower.contains("office")) return "Work"
-            if (lower.contains("home") || lower.contains("house")) return "Home"
+        // 5. Address / Location slot
+        if (slot.name == "address" || slot.name == "destination" || slot.name == "location") {
+            if (!slot.enumValues.isNullOrEmpty()) {
+                val matched = matchEnumSynonym(lower, slot.enumValues)
+                if (matched != null) {
+                    return matched
+                }
+            }
+            val addressRegex = Regex(
+                "(?:deliver to|to|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|app|from)|$)",
+                RegexOption.IGNORE_CASE
+            )
+            val match = addressRegex.find(rawUtterance)
+            if (match != null) {
+                val candidate = match.groupValues[1].trim()
+                if (candidate.isNotEmpty()) {
+                    if (!slot.enumValues.isNullOrEmpty()) {
+                        val enumMatched = matchEnumSynonym(candidate, slot.enumValues)
+                        if (enumMatched != null) {
+                            return enumMatched
+                        }
+                    }
+                    return candidate.replaceFirstChar { it.uppercase() }
+                }
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
         }
 
+        return null
+    }
+
+    private fun matchEnumSynonym(spoken: String, enumValues: List<String>): String? {
+        val s = spoken.lowercase().trim()
+        val words = s.split(Regex("[^a-zA-Z0-9]+")).toSet()
+        for (enumVal in enumValues) {
+            val ev = enumVal.lowercase()
+            if (ev in words) return enumVal
+            if (ev == "work" && (words.contains("office") || words.contains("workplace"))) return enumVal
+            if (ev == "home" && (words.contains("home") || words.contains("house") || words.contains("apartment") || words.contains("flat"))) return enumVal
+        }
         return null
     }
 

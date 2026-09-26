@@ -12,8 +12,6 @@
         tools:ignore="QueryAllPackagesPermission" />
 
     <queries>
-        <package android:name="com.application.zomato" />
-        <package android:name="com.amazon.mShop.android.shopping" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

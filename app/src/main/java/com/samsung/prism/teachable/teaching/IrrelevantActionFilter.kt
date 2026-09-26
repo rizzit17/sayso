@@ -43,10 +43,14 @@ class IrrelevantActionFilter(
         val lowerText = nodeText.lowercase()
 
         // 1. Phone Call / Dialer interruption check (Bonus B1 primary use-case)
-        val isInterruptionPkg = interruptionPackages.any { targetPkg.contains(it, ignoreCase = true) }
+        val hint = session.targetPackageHint
+        val isTargetApp = (hint != null && targetPkg.contains(hint, ignoreCase = true)) ||
+                isIntentRelated(session.originalUtterance, targetPkg)
+
+        val isInterruptionPkg = !isTargetApp && interruptionPackages.any { targetPkg.contains(it, ignoreCase = true) }
         val matchesInterruptionWord = interruptionKeywords.any { lowerText.contains(it) }
 
-        if (isInterruptionPkg || (matchesInterruptionWord && !isIntentRelated(session.originalUtterance, lowerText))) {
+        if (isInterruptionPkg || (!isTargetApp && matchesInterruptionWord && !isIntentRelated(session.originalUtterance, lowerText))) {
             return FilterEvaluation(
                 isRelevant = false,
                 relevanceScore = 0.05f,
@@ -99,7 +103,7 @@ class IrrelevantActionFilter(
 
     private fun isIntentRelated(utterance: String, text: String): Boolean {
         val u = utterance.lowercase()
-        val words = text.split(" ").filter { it.length > 3 }
-        return words.any { u.contains(it) }
+        val words = text.split(Regex("[^a-zA-Z0-9]+")).filter { it.length > 3 }
+        return words.any { u.contains(it.lowercase()) }
     }
 }

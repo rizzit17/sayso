@@ -194,7 +194,7 @@ class Orchestrator(
                             workflow.id, step, snapshotBefore, recAction.stage, "Element not found"
                         )
                         if (stuckContext != null) {
-                            val question = clarificationGenerator.generateQuestion(stuckContext)
+                            val question = clarificationGenerator.generateQuestionSuspend(stuckContext)
                             _stuckClarification.value = question
                             _state.value = ReplayState.ASKING_USER
                             ttsManager?.speak(question.ttsPrompt)
