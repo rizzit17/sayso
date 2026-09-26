@@ -93,6 +93,22 @@ class TeachingRecorder(
         // Do not record internal SaySo interactions (e.g. Stop & Save or dismiss buttons)
         if (pkg == "com.samsung.prism.teachable") return
 
+        // Do not record user switching back to SaySo via Recents / App Switcher
+        val eventSummary = (event.text.joinToString(" ") + " " + (event.contentDescription ?: "")).lowercase()
+        if (eventSummary.contains("prism teachable") || eventSummary.contains("sayso")) {
+            return
+        }
+
+        // Do not record system navigation bar clicks (Recents, Overview, Home)
+        if (pkg == "com.android.systemui") {
+            val resId = try { event.source?.viewIdResourceName?.lowercase() ?: "" } catch (_: Exception) { "" }
+            if (eventSummary.contains("recent") || eventSummary.contains("overview") || eventSummary.contains("home") ||
+                resId.contains("recent") || resId.contains("overview") || resId.contains("home")
+            ) {
+                return
+            }
+        }
+
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 if (pkg.isNotBlank()) {
@@ -100,7 +116,8 @@ class TeachingRecorder(
                 }
             }
 
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_SELECTED -> {
                 val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                 val targetNode = extractNodeFromEvent(event)
                 val after = UiTreeCapture.captureCurrentScreen()
@@ -128,6 +145,10 @@ class TeachingRecorder(
 
     fun stopSession(truncatedAtBoundary: Boolean = false): TeachingSession {
         val session = _currentSession.value ?: throw IllegalStateException("No active session to stop")
+        
+        // Automatically prune any trailing actions on launcher / systemui / recents / SaySo
+        pruneTrailingReturningActions(session)
+
         session.truncatedAtBoundary = truncatedAtBoundary
         session.status = if (truncatedAtBoundary) {
             SessionStatus.TRUNCATED_AT_BOUNDARY
@@ -137,6 +158,31 @@ class TeachingRecorder(
         _currentSession.value = session
         Log.i(TAG, "Teaching session stopped: ${session.sessionId}, retained actions: ${session.retainedActions.size}")
         return session
+    }
+
+    /**
+     * Prunes actions that were performed merely to bring SaySo back to the foreground to stop teaching.
+     */
+    private fun pruneTrailingReturningActions(session: TeachingSession) {
+        while (session.rawActions.isNotEmpty()) {
+            val last = session.rawActions.last()
+            val pkg = last.packageName.lowercase()
+            val text = ((last.targetNode.text ?: "") + " " + (last.targetNode.contentDescription ?: "")).lowercase()
+            val isReturningAction = pkg == "com.samsung.prism.teachable" ||
+                    text.contains("prism teachable") ||
+                    text.contains("sayso") ||
+                    text.contains("recent") ||
+                    text.contains("overview") ||
+                    (pkg.contains("systemui") && (text.contains("home") || text.contains("back") || text.contains("recent"))) ||
+                    (pkg.contains("launcher") && (text.contains("clear") || text.contains("prism") || text.contains("sayso")))
+
+            if (isReturningAction) {
+                Log.i(TAG, "Pruned trailing app-switch/recents action: ${last.semanticDescription}")
+                session.rawActions.removeAt(session.rawActions.size - 1)
+            } else {
+                break
+            }
+        }
     }
 
     fun cancelSession(): TeachingSession? {
@@ -158,11 +204,19 @@ class TeachingRecorder(
             try {
                 val rect = android.graphics.Rect()
                 source.getBoundsInScreen(rect)
-                val text = source.text?.toString() ?: event.text.joinToString("").takeIf { it.isNotBlank() }
-                val desc = source.contentDescription?.toString() ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                var text = source.text?.toString() ?: event.text.joinToString("").takeIf { it.isNotBlank() }
+                var desc = source.contentDescription?.toString() ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
                 val cls = source.className?.toString() ?: event.className?.toString()
                 val pkg = source.packageName?.toString() ?: event.packageName?.toString()
                 val resId = source.viewIdResourceName
+
+                // If text and desc are both blank (e.g. on a Switch, Toggle or CheckBox), look up hierarchy for label
+                if (text.isNullOrBlank() && desc.isNullOrBlank()) {
+                    val label = findLabelInHierarchy(source)
+                    if (!label.isNullOrBlank()) {
+                        text = label
+                    }
+                }
 
                 return UiNode(
                     resourceId = resId,
@@ -196,6 +250,33 @@ class TeachingRecorder(
             clickable = true,
             bounds = Bounds.ZERO
         )
+    }
+
+    private fun findLabelInHierarchy(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int = 0): String? {
+        if (depth > 2) return null
+        val parent = try { node.parent } catch (_: Exception) { null } ?: return null
+        try {
+            for (i in 0 until parent.childCount) {
+                val child = try { parent.getChild(i) } catch (_: Exception) { null } ?: continue
+                try {
+                    val ct = child.text?.toString()
+                    val cd = child.contentDescription?.toString()
+                    if (!ct.isNullOrBlank()) {
+                        return ct
+                    }
+                    if (!cd.isNullOrBlank()) {
+                        return cd
+                    }
+                } finally {
+                    @Suppress("DEPRECATION")
+                    try { child.recycle() } catch (_: Exception) {}
+                }
+            }
+            return findLabelInHierarchy(parent, depth + 1)
+        } finally {
+            @Suppress("DEPRECATION")
+            try { parent.recycle() } catch (_: Exception) {}
+        }
     }
 
     companion object {

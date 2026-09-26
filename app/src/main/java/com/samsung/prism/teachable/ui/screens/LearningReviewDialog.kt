@@ -328,14 +328,16 @@ fun LearningReviewDialog(
                         )
                     }.toMutableList()
 
-                    // Add the Guaranteed Safety Handoff Marker at the end
-                    stepItems.add(
-                        StepDisplayItem(
-                            stepNumber = stepItems.size + 1,
-                            title = "Safety Handoff Point",
-                            isBoundary = true
+                    // Only add the Safety Handoff Marker if the workflow halted at a credential/payment boundary
+                    if (workflow.steps.any { it.isBoundary }) {
+                        stepItems.add(
+                            StepDisplayItem(
+                                stepNumber = stepItems.size + 1,
+                                title = "Safety Handoff Point",
+                                isBoundary = true
+                            )
                         )
-                    )
+                    }
 
                     StepTrackerList(items = stepItems)
                 }

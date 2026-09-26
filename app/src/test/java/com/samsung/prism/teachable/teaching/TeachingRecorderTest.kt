@@ -216,6 +216,67 @@ class TeachingRecorderTest {
     }
 
     @Test
+    fun testTrailingRecentsActionsPrunedOnStop() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val snap = UiSnapshot(packageName = "com.android.settings")
+
+        // 1. User taps Network & internet
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Network & internet", packageName = "com.android.settings", clickable = true),
+            before = snap,
+            after = snap
+        )
+
+        // 2. User taps Airplane Mode (with summary "Turn off mobile, Wi-Fi, and Bluetooth")
+        val airplaneAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(
+                text = "Airplane mode",
+                contentDescription = "Turn off mobile, Wi-Fi, and Bluetooth",
+                packageName = "com.android.settings",
+                clickable = true
+            ),
+            before = snap,
+            after = snap
+        )
+        assertFalse(airplaneAction.isFiltered)
+
+        // 3. User taps Recents button to switch back to SaySo
+        val recentsAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(
+                text = "Recents",
+                packageName = "com.android.systemui",
+                className = "android.widget.ImageView",
+                clickable = true
+            ),
+            before = snap,
+            after = snap
+        )
+
+        // 4. User taps SaySo card in Recents
+        val saysoCardAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(
+                text = "Prism Teachable AutomationClear",
+                packageName = "com.google.android.apps.nexuslauncher",
+                className = "android.widget.FrameLayout",
+                clickable = true
+            ),
+            before = snap,
+            after = snap
+        )
+
+        // Verify recents and SaySo card were filtered or pruned
+        val stopped = recorder.stopSession()
+        // The trailing actions on Recents and SaySo must be pruned!
+        assertEquals(2, stopped.retainedActions.size)
+        assertEquals("Network & internet", stopped.retainedActions[0].targetNode.text)
+        assertEquals("Airplane mode", stopped.retainedActions[1].targetNode.text)
+    }
+
+    @Test
     fun testCancelTeachingSession() {
         val session = recorder.startSession("Test Cancel Flow")
         assertTrue(recorder.isRecording)

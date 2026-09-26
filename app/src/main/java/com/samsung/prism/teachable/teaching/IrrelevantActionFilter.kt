@@ -28,8 +28,8 @@ class IrrelevantActionFilter(
     )
 
     private val interruptionKeywords = listOf(
-        "decline", "reject", "incoming call", "end call", "answer", "mute",
-        "dismiss notification", "clear all", "battery saver", "turn off"
+        "decline call", "reject call", "incoming call", "end call", "answer call",
+        "dismiss notification"
     )
 
     fun evaluate(
@@ -45,12 +45,13 @@ class IrrelevantActionFilter(
         // 1. Phone Call / Dialer interruption check (Bonus B1 primary use-case)
         val hint = session.targetPackageHint
         val isTargetApp = (hint != null && targetPkg.contains(hint, ignoreCase = true)) ||
-                isIntentRelated(session.originalUtterance, targetPkg)
+                isIntentRelated(session.originalUtterance, targetPkg) ||
+                targetPkg == "com.android.settings"
 
         val isInterruptionPkg = !isTargetApp && interruptionPackages.any { targetPkg.contains(it, ignoreCase = true) }
         val matchesInterruptionWord = interruptionKeywords.any { lowerText.contains(it) }
 
-        if (isInterruptionPkg || (!isTargetApp && matchesInterruptionWord && !isIntentRelated(session.originalUtterance, lowerText))) {
+        if (isInterruptionPkg || (matchesInterruptionWord && !isIntentRelated(session.originalUtterance, lowerText))) {
             return FilterEvaluation(
                 isRelevant = false,
                 relevanceScore = 0.05f,
@@ -58,11 +59,25 @@ class IrrelevantActionFilter(
             )
         }
 
-        // 2. Package continuity check
+        // 2. Package continuity & SaySo return check
         val isLauncher = isLauncherPackage(targetPkg)
         val expectedPkg = session.targetPackageHint ?: session.rawActions.firstOrNull {
             !isLauncherPackage(it.packageName) && it.packageName != "com.samsung.prism.teachable" && !it.isFiltered
         }?.packageName
+
+        // Filter out actions where the user is switching back to SaySo via Recents / Launcher
+        val isReturningToSayso = targetPkg == "com.samsung.prism.teachable" ||
+                lowerText.contains("prism teachable") ||
+                lowerText.contains("sayso") ||
+                lowerText.contains("recent") ||
+                lowerText.contains("overview")
+        if (isReturningToSayso) {
+            return FilterEvaluation(
+                isRelevant = false,
+                relevanceScore = 0.0f,
+                reason = "User switching apps or returning to SaySo"
+            )
+        }
 
         if (expectedPkg != null) {
             if (!isLauncher && targetPkg != expectedPkg) {

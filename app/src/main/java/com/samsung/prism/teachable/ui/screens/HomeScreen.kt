@@ -900,13 +900,35 @@ fun HomeScreen(
                 showTeachSetupDialog = false
                 viewModel.startTeaching(utterance, pkg)
 
-                // Minimize the app to the device home page immediately after naming
-                context.findActivity()?.moveTaskToBack(true)
-                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_HOME)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                // Launch the target app directly if identified (e.g. Settings, Maps, WhatsApp),
+                // otherwise minimize to home screen for manual app selection
+                var launched = false
+                if (!pkg.isNullOrBlank()) {
+                    val launchIntent = if (pkg == "com.android.settings") {
+                        Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                    } else {
+                        context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                    }
+                    if (launchIntent != null) {
+                        try {
+                            context.startActivity(launchIntent)
+                            launched = true
+                        } catch (_: Exception) {}
+                    }
                 }
-                context.startActivity(homeIntent)
+
+                if (!launched) {
+                    context.findActivity()?.moveTaskToBack(true)
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(homeIntent)
+                }
             }
         )
     }
