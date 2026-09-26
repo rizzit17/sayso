@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Timer
@@ -77,9 +78,11 @@ import kotlinx.coroutines.delay
 fun TeachingLiveCaptureDialog(
     session: TeachingSession,
     onStopAndSave: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onMinimize: () -> Unit = {}
 ) {
     var elapsedSeconds by remember { mutableIntStateOf(0) }
+    var actionCount by remember { mutableIntStateOf(session.retainedActions.size) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -88,13 +91,23 @@ fun TeachingLiveCaptureDialog(
         }
     }
 
+    LaunchedEffect(session) {
+        com.samsung.prism.teachable.teaching.TeachingRecorder.instance.actionStream.collect {
+            actionCount = session.retainedActions.size
+        }
+    }
+
     val minutes = elapsedSeconds / 60
     val seconds = elapsedSeconds % 60
     val timerText = String.format("%02d:%02d", minutes, seconds)
 
     Dialog(
-        onDismissRequest = onCancel,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        onDismissRequest = onMinimize,
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
         Card(
             modifier = Modifier
@@ -317,6 +330,28 @@ fun TeachingLiveCaptureDialog(
                             text = "Stop & Save Flow",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onMinimize,
+                        shape = PillShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Home,
+                            contentDescription = null,
+                            tint = SaysoPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Minimize to Home (Continue Tapping)",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SaysoPrimary
                         )
                     }
 

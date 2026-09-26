@@ -45,6 +45,10 @@ import com.samsung.prism.teachable.ui.theme.SaysoPrimaryContainer
 import com.samsung.prism.teachable.ui.theme.SaysoSurface
 import com.samsung.prism.teachable.ui.theme.SaysoSurfaceContainer
 
+import android.content.Intent
+import androidx.activity.viewModels
+import com.samsung.prism.teachable.teaching.TeachingNotificationManager
+
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     data object Home : Screen("home", "Home", Icons.Default.Home)
     data object Workflows : Screen("workflows", "Flows", Icons.Default.AutoMode)
@@ -53,12 +57,32 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
 }
 
 class MainActivity : ComponentActivity() {
+    private val mainViewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleNotificationAction(intent)
         setContent {
             PrismTheme {
-                MainAppContent()
+                MainAppContent(viewModel = mainViewModel)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationAction(intent)
+    }
+
+    private fun handleNotificationAction(intent: Intent?) {
+        when (intent?.action) {
+            TeachingNotificationManager.ACTION_STOP_TEACHING -> {
+                mainViewModel.stopTeachingAndSave()
+            }
+            TeachingNotificationManager.ACTION_CANCEL_TEACHING -> {
+                mainViewModel.cancelTeaching()
             }
         }
     }

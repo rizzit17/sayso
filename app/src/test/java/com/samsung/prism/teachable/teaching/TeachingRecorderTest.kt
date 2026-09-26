@@ -151,4 +151,76 @@ class TeachingRecorderTest {
         assertTrue(accidentalAction.isFiltered) // prior accidental tap marked filtered!
         assertEquals("Cancelled accidental tap", accidentalAction.filterReason)
     }
+
+    @Test
+    fun testHomeScreenMinimizationAndLauncherTransition() {
+        // User starts teaching without explicit target package hint (minimized to home screen)
+        val session = recorder.startSession("Toggle Airplane Mode")
+        assertTrue(recorder.isRecording)
+
+        // 1. User is on home screen launcher and taps Settings icon
+        val launcherNode = UiNode(
+            text = "Settings",
+            packageName = "com.google.android.apps.nexuslauncher",
+            clickable = true
+        )
+        val launcherSnap = UiSnapshot(packageName = "com.google.android.apps.nexuslauncher")
+        val settingsSnap1 = UiSnapshot(packageName = "com.android.settings")
+
+        val launchAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = launcherNode,
+            before = launcherSnap,
+            after = settingsSnap1
+        )
+        // Launcher tap is evaluated without blocking subsequent app actions
+        assertEquals("com.google.android.apps.nexuslauncher", launchAction.packageName)
+
+        // 2. User is now in Settings and taps "Network & internet"
+        val networkNode = UiNode(
+            resourceId = "com.android.settings:id/network_settings",
+            text = "Network & internet",
+            packageName = "com.android.settings",
+            clickable = true
+        )
+        val settingsSnap2 = UiSnapshot(packageName = "com.android.settings")
+
+        val networkAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = networkNode,
+            before = settingsSnap1,
+            after = settingsSnap2
+        )
+        assertFalse(networkAction.isFiltered)
+        assertEquals("com.android.settings", networkAction.packageName)
+        assertEquals("com.android.settings", session.targetPackageHint)
+
+        // 3. User toggles Airplane Mode switch
+        val switchNode = UiNode(
+            resourceId = "com.android.settings:id/switch_airplane",
+            text = "Airplane mode",
+            packageName = "com.android.settings",
+            clickable = true
+        )
+        val airplaneAction = recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = switchNode,
+            before = settingsSnap2,
+            after = settingsSnap2
+        )
+        assertFalse(airplaneAction.isFiltered)
+
+        val stopped = recorder.stopSession()
+        assertEquals(SessionStatus.COMPLETED, stopped.status)
+        assertTrue(stopped.retainedActions.size >= 2)
+    }
+
+    @Test
+    fun testCancelTeachingSession() {
+        val session = recorder.startSession("Test Cancel Flow")
+        assertTrue(recorder.isRecording)
+        val cancelled = recorder.cancelSession()
+        assertEquals(SessionStatus.CANCELLED, cancelled?.status)
+        assertFalse(recorder.isRecording)
+    }
 }

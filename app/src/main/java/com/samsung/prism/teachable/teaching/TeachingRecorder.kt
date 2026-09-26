@@ -37,7 +37,7 @@ class TeachingRecorder(
             targetPackageHint = targetPackageHint
         )
         _currentSession.value = session
-        previousSnapshot = UiTreeCapture.captureCurrentScreen()
+        previousSnapshot = null
         Log.i(TAG, "Started teaching session: ${session.sessionId} for '$utterance'")
         return session
     }
@@ -54,8 +54,11 @@ class TeachingRecorder(
     ): RawAction {
         val session = _currentSession.value ?: throw IllegalStateException("No active teaching session")
 
+        val targetPkg = targetNode.packageName?.takeIf { it.isNotBlank() }
+            ?: before.packageName.ifEmpty { after.packageName.ifEmpty { "" } }
+
         val action = RawAction(
-            packageName = before.packageName.ifEmpty { targetNode.packageName ?: "" },
+            packageName = targetPkg,
             actionType = actionType,
             inputText = inputText,
             targetNode = targetNode,
@@ -86,12 +89,29 @@ class TeachingRecorder(
         val session = _currentSession.value ?: return
         if (session.status != SessionStatus.RECORDING) return
 
+        val pkg = event.packageName?.toString() ?: ""
+        // Do not record internal SaySo interactions (e.g. Stop & Save or dismiss buttons)
+        if (pkg == "com.samsung.prism.teachable") return
+
         when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                if (pkg.isNotBlank()) {
+                    previousSnapshot = UiTreeCapture.captureCurrentScreen()
+                }
+            }
+
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                 val targetNode = extractNodeFromEvent(event)
                 val after = UiTreeCapture.captureCurrentScreen()
                 recordAction(ActionType.CLICK, targetNode, null, before, after)
+            }
+
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
+                val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
+                val targetNode = extractNodeFromEvent(event)
+                val after = UiTreeCapture.captureCurrentScreen()
+                recordAction(ActionType.LONG_CLICK, targetNode, null, before, after)
             }
 
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
@@ -119,7 +139,50 @@ class TeachingRecorder(
         return session
     }
 
+    fun cancelSession(): TeachingSession? {
+        val session = _currentSession.value ?: return null
+        session.status = SessionStatus.CANCELLED
+        _currentSession.value = null
+        Log.i(TAG, "Teaching session cancelled: ${session.sessionId}")
+        return session
+    }
+
     private fun extractNodeFromEvent(event: AccessibilityEvent): UiNode {
+        val source = try {
+            event.source
+        } catch (e: Exception) {
+            null
+        }
+
+        if (source != null) {
+            try {
+                val rect = android.graphics.Rect()
+                source.getBoundsInScreen(rect)
+                val text = source.text?.toString() ?: event.text.joinToString("").takeIf { it.isNotBlank() }
+                val desc = source.contentDescription?.toString() ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                val cls = source.className?.toString() ?: event.className?.toString()
+                val pkg = source.packageName?.toString() ?: event.packageName?.toString()
+                val resId = source.viewIdResourceName
+
+                return UiNode(
+                    resourceId = resId,
+                    text = text,
+                    contentDescription = desc,
+                    className = cls,
+                    packageName = pkg,
+                    clickable = source.isClickable,
+                    scrollable = source.isScrollable,
+                    enabled = source.isEnabled,
+                    bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom)
+                )
+            } finally {
+                try {
+                    @Suppress("DEPRECATION")
+                    source.recycle()
+                } catch (_: Exception) {}
+            }
+        }
+
         val text = event.text.joinToString("").takeIf { it.isNotBlank() }
         val desc = event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
         val cls = event.className?.toString()

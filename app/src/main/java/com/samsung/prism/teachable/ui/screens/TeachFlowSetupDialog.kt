@@ -380,7 +380,7 @@ fun TeachFlowSetupDialog(
                             color = SaysoOnSurface
                         )
                         Text(
-                            text = "Will record taps & generalize parameters",
+                            text = "Minimizes to home screen to learn your taps",
                             fontSize = 11.sp,
                             color = SaysoOnSurfaceVariant
                         )
@@ -416,6 +416,14 @@ fun TeachFlowSetupDialog(
                         fontWeight = FontWeight.Bold
                     )
                 }
+
+                Text(
+                    text = "SaySo will minimize to your home screen so you can demonstrate your task naturally across any app.",
+                    fontSize = 11.sp,
+                    color = SaysoOnSurfaceVariant,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
 
                 // Safety Footnote
                 Row(

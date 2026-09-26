@@ -59,19 +59,29 @@ class IrrelevantActionFilter(
         }
 
         // 2. Package continuity check
-        val expectedPkg = session.targetPackageHint ?: session.rawActions.firstOrNull()?.packageName
-        if (expectedPkg != null && targetPkg != expectedPkg) {
-            // Allow system permission dialogs or system keyboards
-            val isSystemDialog = targetPkg == "com.google.android.packageinstaller" ||
-                    targetPkg == "com.android.permissioncontroller" ||
-                    targetPkg == "android"
+        val isLauncher = isLauncherPackage(targetPkg)
+        val expectedPkg = session.targetPackageHint ?: session.rawActions.firstOrNull {
+            !isLauncherPackage(it.packageName) && it.packageName != "com.samsung.prism.teachable" && !it.isFiltered
+        }?.packageName
 
-            if (!isSystemDialog) {
-                return FilterEvaluation(
-                    isRelevant = false,
-                    relevanceScore = 0.20f,
-                    reason = "Action outside target application ($targetPkg)"
-                )
+        if (expectedPkg != null) {
+            if (!isLauncher && targetPkg != expectedPkg) {
+                // Allow system permission dialogs or system keyboards
+                val isSystemDialog = targetPkg == "com.google.android.packageinstaller" ||
+                        targetPkg == "com.android.permissioncontroller" ||
+                        targetPkg == "android"
+
+                if (!isSystemDialog) {
+                    return FilterEvaluation(
+                        isRelevant = false,
+                        relevanceScore = 0.20f,
+                        reason = "Action outside target application ($targetPkg)"
+                    )
+                }
+            }
+        } else {
+            if (!isLauncher && targetPkg != "com.samsung.prism.teachable" && targetPkg.isNotBlank()) {
+                session.targetPackageHint = targetPkg
             }
         }
 
@@ -105,5 +115,15 @@ class IrrelevantActionFilter(
         val u = utterance.lowercase()
         val words = text.split(Regex("[^a-zA-Z0-9]+")).filter { it.length > 3 }
         return words.any { u.contains(it.lowercase()) }
+    }
+
+    private fun isLauncherPackage(pkg: String): Boolean {
+        val lower = pkg.lowercase()
+        return lower.contains("launcher") ||
+                lower.contains("quickstep") ||
+                lower.contains("systemui") ||
+                lower.contains("home") ||
+                lower.contains("nexuslauncher") ||
+                pkg == "android"
     }
 }

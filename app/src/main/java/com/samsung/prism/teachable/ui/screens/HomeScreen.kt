@@ -1,6 +1,9 @@
 package com.samsung.prism.teachable.ui.screens
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
@@ -146,6 +149,14 @@ fun HomeScreen(
     var manualTextInput by remember { mutableStateOf("") }
     var showTeachSetupDialog by remember { mutableStateOf(false) }
     var reviewWorkflow by remember { mutableStateOf<Workflow?>(null) }
+
+    val lastLearned by viewModel.lastLearnedWorkflow.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(lastLearned) {
+        if (lastLearned != null) {
+            reviewWorkflow = lastLearned
+            viewModel.clearLastLearnedWorkflow()
+        }
+    }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -887,6 +898,14 @@ fun HomeScreen(
             onStartTeaching = { utterance, pkg ->
                 showTeachSetupDialog = false
                 viewModel.startTeaching(utterance, pkg)
+
+                // Minimize the app to the device home page immediately after naming
+                context.findActivity()?.moveTaskToBack(true)
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(homeIntent)
             }
         )
     }
@@ -896,10 +915,18 @@ fun HomeScreen(
             session = session,
             onStopAndSave = {
                 viewModel.stopTeachingAndSave()
-                // Show review dialog for the newly learned workflow
-                reviewWorkflow = viewModel.workflows.value.firstOrNull()
             },
-            onCancel = { viewModel.stopTeachingAndSave() }
+            onCancel = {
+                viewModel.cancelTeaching()
+            },
+            onMinimize = {
+                context.findActivity()?.moveTaskToBack(true)
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(homeIntent)
+            }
         )
     }
 
@@ -947,4 +974,10 @@ private fun StepperPreviewTile(
             maxLines = 1
         )
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

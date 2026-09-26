@@ -17,6 +17,7 @@ import com.samsung.prism.teachable.storage.WorkflowRepository
 import com.samsung.prism.teachable.stuck.ClarificationGenerator
 import com.samsung.prism.teachable.stuck.ClarificationOption
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
+import com.samsung.prism.teachable.teaching.TeachingNotificationManager
 import com.samsung.prism.teachable.teaching.TeachingRecorder
 import com.samsung.prism.teachable.teaching.TeachingSession
 import com.samsung.prism.teachable.voice.SpeechToText
@@ -68,6 +69,13 @@ class MainViewModel @JvmOverloads constructor(
     private val _currentTeachingSession = MutableStateFlow<TeachingSession?>(null)
     val currentTeachingSession: StateFlow<TeachingSession?> = _currentTeachingSession.asStateFlow()
 
+    private val _lastLearnedWorkflow = MutableStateFlow<Workflow?>(null)
+    val lastLearnedWorkflow: StateFlow<Workflow?> = _lastLearnedWorkflow.asStateFlow()
+
+    fun clearLastLearnedWorkflow() {
+        _lastLearnedWorkflow.value = null
+    }
+
     val isTeaching: Boolean get() = TeachingRecorder.instance.isRecording
 
     // Gemini API Key & GenAI Configuration State
@@ -89,6 +97,22 @@ class MainViewModel @JvmOverloads constructor(
     init {
         loadData()
         observeSpeechInput()
+        observeTeachingActions()
+    }
+
+    private fun observeTeachingActions() {
+        viewModelScope.launch {
+            TeachingRecorder.instance.actionStream.collect {
+                val session = _currentTeachingSession.value
+                if (session != null) {
+                    TeachingNotificationManager.updateActionCount(
+                        context = getApplication(),
+                        utterance = session.originalUtterance,
+                        actionCount = session.retainedActions.size
+                    )
+                }
+            }
+        }
     }
 
     fun loadData() {
@@ -134,18 +158,31 @@ class MainViewModel @JvmOverloads constructor(
         val session = TeachingRecorder.instance.startSession(utterance, targetPackageHint)
         _currentTeachingSession.value = session
         orchestrator.ttsManager?.speak("Okay. I'll watch your actions.")
+        TeachingNotificationManager.showTeachingNotification(
+            context = getApplication(),
+            utterance = utterance,
+            actionCount = 0
+        )
     }
 
     fun stopTeachingAndSave() {
+        TeachingNotificationManager.dismissTeachingNotification(getApplication())
         val session = TeachingRecorder.instance.stopSession() ?: return
         if (session.retainedActions.isNotEmpty()) {
             viewModelScope.launch {
                 val workflow = genAiManager.generalizeWorkflow(session)
                 repository.save(workflow)
                 loadData()
+                _lastLearnedWorkflow.value = workflow
                 orchestrator.ttsManager?.speak("Learned: ${workflow.originalUtterance}")
             }
         }
+        _currentTeachingSession.value = null
+    }
+
+    fun cancelTeaching() {
+        TeachingNotificationManager.dismissTeachingNotification(getApplication())
+        TeachingRecorder.instance.cancelSession()
         _currentTeachingSession.value = null
     }
 
