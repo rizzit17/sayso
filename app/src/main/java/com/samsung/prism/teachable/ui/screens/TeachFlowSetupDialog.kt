@@ -1,5 +1,10 @@
 package com.samsung.prism.teachable.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -10,6 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RadioButtonChecked
@@ -31,73 +39,168 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import com.samsung.prism.teachable.generalization.ExtractedParameters
+import com.samsung.prism.teachable.generalization.UniversalDomainExtractor
+import com.samsung.prism.teachable.ui.MainViewModel
 import com.samsung.prism.teachable.ui.theme.BadgeShape
 import com.samsung.prism.teachable.ui.theme.CardShape
 import com.samsung.prism.teachable.ui.theme.ChipShape
 import com.samsung.prism.teachable.ui.theme.PillShape
 import com.samsung.prism.teachable.ui.theme.SaysoOnPrimary
-import com.samsung.prism.teachable.ui.theme.SaysoOnPrimaryContainer
 import com.samsung.prism.teachable.ui.theme.SaysoOnSecondaryContainer
 import com.samsung.prism.teachable.ui.theme.SaysoOnSurface
 import com.samsung.prism.teachable.ui.theme.SaysoOnSurfaceVariant
-import com.samsung.prism.teachable.ui.theme.SaysoOnTertiaryContainer
 import com.samsung.prism.teachable.ui.theme.SaysoPrimary
-import com.samsung.prism.teachable.ui.theme.SaysoPrimaryContainer
 import com.samsung.prism.teachable.ui.theme.SaysoPrimaryFixed
 import com.samsung.prism.teachable.ui.theme.SaysoSecondary
 import com.samsung.prism.teachable.ui.theme.SaysoSecondaryContainer
-import com.samsung.prism.teachable.ui.theme.SaysoSubCardShape
-import com.samsung.prism.teachable.ui.theme.SubCardShape
 import com.samsung.prism.teachable.ui.theme.SaysoSurface
 import com.samsung.prism.teachable.ui.theme.SaysoSurfaceContainer
 import com.samsung.prism.teachable.ui.theme.SaysoSurfaceContainerHigh
 import com.samsung.prism.teachable.ui.theme.SaysoSurfaceContainerLow
 import com.samsung.prism.teachable.ui.theme.SaysoSurfaceContainerLowest
 import com.samsung.prism.teachable.ui.theme.SaysoTertiaryContainer
+import com.samsung.prism.teachable.ui.theme.SubCardShape
+import com.samsung.prism.teachable.voice.VoiceInputState
+import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TeachFlowSetupDialog(
+    viewModel: MainViewModel,
     onDismiss: () -> Unit,
     onStartTeaching: (utterance: String, targetPackage: String?) -> Unit
 ) {
+    val context = LocalContext.current
     var utteranceInput by remember { mutableStateOf("") }
 
+    val voiceState by viewModel.voiceInputState.collectAsState()
+    val partialText by viewModel.speechToText.partialText.collectAsState()
+    val isGenAiEnabled by viewModel.isGenAiEnabled.collectAsState()
+    val isListening = voiceState == VoiceInputState.LISTENING
+
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasMicPermission = granted
+        if (granted) {
+            viewModel.startListening()
+        }
+    }
+
+    // Activate teaching setup state to prevent spoken words from executing replay commands
+    DisposableEffect(Unit) {
+        viewModel.setTeachingSetupActive(true)
+        if (hasMicPermission) {
+            viewModel.startListening()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+        onDispose {
+            viewModel.setTeachingSetupActive(false)
+            viewModel.stopListening()
+        }
+    }
+
+    // Collect recognized speech text live into input field
+    LaunchedEffect(Unit) {
+        viewModel.speechToText.recognizedText.collect { text ->
+            if (text.isNotBlank()) {
+                utteranceInput = text
+            }
+        }
+    }
+
+    // Reflect partial speech live while user is actively speaking
+    LaunchedEffect(partialText) {
+        if (isListening && partialText.isNotBlank()) {
+            utteranceInput = partialText
+        }
+    }
+
+    // Gemini GenAI Parameter Extraction with Instant Local Fallback
+    var isAnalyzingWithGemini by remember { mutableStateOf(false) }
+    var geminiExtractedParams by remember { mutableStateOf<ExtractedParameters?>(null) }
+
+    // Instant local extraction (0ms lag fallback)
+    val localParams = remember(utteranceInput) {
+        UniversalDomainExtractor.extract(utteranceInput)
+    }
+
+    // Debounced GenAI call to Gemini
+    LaunchedEffect(utteranceInput) {
+        val trimmed = utteranceInput.trim()
+        if (trimmed.length > 3) {
+            delay(500) // debounce typing/speech
+            isAnalyzingWithGemini = true
+            try {
+                val aiResult = viewModel.analyzeGoalWithGemini(trimmed)
+                geminiExtractedParams = aiResult
+            } catch (e: Exception) {
+                // Keep local fallback
+            } finally {
+                isAnalyzingWithGemini = false
+            }
+        } else {
+            geminiExtractedParams = null
+            isAnalyzingWithGemini = false
+        }
+    }
+
+    // Prefer Gemini's deep entity reasoning if available, otherwise local universal extractor
+    val effectiveParams = geminiExtractedParams ?: localParams
+    val detectedParams = effectiveParams.toUiChips()
+    val detectedAppName = effectiveParams.appName ?: "Auto-detected during demonstration"
+    val detectedPkg = effectiveParams.targetPackage
+    val isGeminiPowered = geminiExtractedParams != null && isGenAiEnabled
+
+    // Waveform animation
     val infiniteTransition = rememberInfiniteTransition(label = "wave")
     val waveScale1 by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1.0f,
+        initialValue = if (isListening) 0.3f else 0.2f,
+        targetValue = if (isListening) 1.0f else 0.2f,
         animationSpec = infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "w1"
     )
     val waveScale2 by infiniteTransition.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 0.3f,
+        initialValue = if (isListening) 0.8f else 0.2f,
+        targetValue = if (isListening) 0.3f else 0.2f,
         animationSpec = infiniteRepeatable(tween(600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "w2"
     )
     val waveScale3 by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 0.9f,
+        initialValue = if (isListening) 0.2f else 0.2f,
+        targetValue = if (isListening) 0.9f else 0.2f,
         animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "w3"
     )
@@ -167,14 +270,14 @@ fun TeachFlowSetupDialog(
                         lineHeight = 28.sp
                     )
                     Text(
-                        text = "Describe the task in your natural words. Sayso will observe your taps and extract dynamic parameters like items, addresses, or quantities.",
+                        text = "Describe your goal by voice or text across any app (Settings, Maps, Messaging, Music, Shopping). Gemini extracts target entities live.",
                         fontSize = 13.sp,
                         color = SaysoOnSurfaceVariant,
                         lineHeight = 18.sp
                     )
                 }
 
-                // Voice Transcript & Waveform Card
+                // Voice Transcript & Interactive Waveform Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = SubCardShape,
@@ -187,41 +290,77 @@ fun TeachFlowSetupDialog(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Live status pill
+                        // Live status pill + Mic Toggle Button
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "LISTENING ACTIVE",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SaysoPrimary,
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(
+                                            if (isListening) SaysoPrimary else SaysoOnSurfaceVariant,
+                                            CircleShape
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isListening) "LISTENING ACTIVE" else "MIC PAUSED",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isListening) SaysoPrimary else SaysoOnSurfaceVariant
+                                )
+                            }
+
+                            // Interactive Mic Button
+                            IconButton(
+                                onClick = {
+                                    if (!hasMicPermission) {
+                                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    } else if (isListening) {
+                                        viewModel.stopListening()
+                                    } else {
+                                        viewModel.startListening()
+                                    }
+                                },
                                 modifier = Modifier
-                                    .background(SaysoSurfaceContainerHigh, BadgeShape)
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                            Text(
-                                text = "Crisp audio • 98% confidence",
-                                fontSize = 11.sp,
-                                color = SaysoOnSurfaceVariant
-                            )
+                                    .size(36.dp)
+                                    .background(
+                                        if (isListening) SaysoPrimary else SaysoSurfaceContainerHigh,
+                                        CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = if (isListening) Icons.Default.Mic else Icons.Default.MicOff,
+                                    contentDescription = if (isListening) "Mute Microphone" else "Start Microphone",
+                                    tint = if (isListening) SaysoOnPrimary else SaysoOnSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
 
                         // Audio Waveform Indicator
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.height(36.dp)
                         ) {
-                            val scales = listOf(waveScale1, waveScale2, waveScale3, waveScale1, waveScale2, waveScale3, waveScale1)
+                            val scales = if (isListening) {
+                                listOf(waveScale1, waveScale2, waveScale3, waveScale1, waveScale2, waveScale3, waveScale1)
+                            } else {
+                                listOf(0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f)
+                            }
                             for (s in scales) {
                                 Box(
                                     modifier = Modifier
                                         .width(5.dp)
-                                        .height((32 * s).coerceAtLeast(8.0f).dp)
-                                        .background(SaysoSecondary, CircleShape)
+                                        .height((32 * s).coerceAtLeast(6.0f).dp)
+                                        .background(
+                                            if (isListening) SaysoSecondary else SaysoSurfaceContainerHigh,
+                                            CircleShape
+                                        )
                                 )
                             }
                         }
@@ -231,8 +370,8 @@ fun TeachFlowSetupDialog(
                             value = utteranceInput,
                             onValueChange = { utteranceInput = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Spoken Goal") },
-                            placeholder = { Text("e.g. Toggle Airplane Mode in Settings") },
+                            label = { Text("Spoken Goal / Utterance") },
+                            placeholder = { Text("e.g. Turn off Airplane mode in Settings, or Find route to Central Park in Maps") },
                             shape = SubCardShape,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = SaysoPrimary,
@@ -244,57 +383,7 @@ fun TeachFlowSetupDialog(
                     }
                 }
 
-                val lowerInput = utteranceInput.lowercase()
-
-                // Dynamic platform / app name extraction from preposition ("on <App>", "in <App>", etc.)
-                val platformMatch = Regex(
-                    "(?:on|in|using|via|app)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:and|with|to|deliver|for)|$)",
-                    RegexOption.IGNORE_CASE
-                ).find(utteranceInput)
-                val extractedApp = platformMatch?.groupValues?.get(1)?.trim()?.replaceFirstChar { it.uppercase() }
-
-                val (detectedAppName, detectedPkg) = when {
-                    lowerInput.contains("setting") || lowerInput.contains("airplane") || lowerInput.contains("wifi") || lowerInput.contains("bluetooth") ->
-                        Pair("System Settings", "com.android.settings")
-                    !extractedApp.isNullOrBlank() && !extractedApp.equals("the", ignoreCase = true) ->
-                        Pair(extractedApp, null)
-                    else ->
-                        Pair("Auto-detected during demonstration", null)
-                }
-
-                // Dynamic parameter extraction for real-time live preview
-                val detectedParams = mutableListOf<Pair<String, String>>()
-
-                // 1. Store / Merchant
-                val storeMatch = Regex("(?:from|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|to|deliver)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
-                storeMatch?.groupValues?.get(1)?.trim()?.let {
-                    if (it.isNotBlank() && !it.equals(extractedApp, ignoreCase = true)) {
-                        detectedParams.add(Pair("Store", it.replaceFirstChar { c -> c.uppercase() }))
-                    }
-                }
-
-                // 2. Item / Core entity
-                val itemMatch = Regex("(?:order|get|buy|search\\s+for|find|send|play|open)\\s+(?:(?:a|an|the)\\s+)?([a-zA-Z0-9'\\s]+?)(?:\\s+(?:from|at|on|in|to)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
-                itemMatch?.groupValues?.get(1)?.trim()?.let {
-                    if (it.isNotBlank() && it.length > 1 && !it.equals(extractedApp, ignoreCase = true)) {
-                        detectedParams.add(Pair("Item", it.replaceFirstChar { c -> c.uppercase() }))
-                    }
-                }
-
-                // 3. Destination / Address
-                val destMatch = Regex("(?:to|deliver\\s+to|send\\s+to)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|from)|$)", RegexOption.IGNORE_CASE).find(utteranceInput)
-                destMatch?.groupValues?.get(1)?.trim()?.let {
-                    if (it.isNotBlank() && !it.equals(extractedApp, ignoreCase = true)) {
-                        detectedParams.add(Pair("To", it.replaceFirstChar { c -> c.uppercase() }))
-                    }
-                }
-
-                // 4. Platform / App
-                if (!extractedApp.isNullOrBlank() && !extractedApp.equals("the", ignoreCase = true)) {
-                    detectedParams.add(Pair("App", extractedApp))
-                }
-
-                // Detected target parameters preview
+                // Detected target parameters preview with Gemini AI indicator
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -310,25 +399,59 @@ fun TeachFlowSetupDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Detected target parameters",
+                                text = "Detected Target Parameters",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = SaysoOnSurface
                             )
                         }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isAnalyzingWithGemini) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                    color = SaysoPrimary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Analyzing...",
+                                    fontSize = 11.sp,
+                                    color = SaysoPrimary
+                                )
+                            } else if (isGeminiPowered) {
+                                Text(
+                                    text = "Gemini AI",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SaysoPrimary,
+                                    modifier = Modifier
+                                        .background(SaysoPrimaryFixed, BadgeShape)
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
 
-                    // Dynamic Chips
-                    Row(
+                    // Dynamic multi-domain chips
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (detectedParams.isNotEmpty()) {
-                            for ((paramLabel, paramVal) in detectedParams.take(3)) {
+                            for ((paramLabel, paramVal) in detectedParams) {
                                 val (bg, fg) = when (paramLabel) {
-                                    "Store" -> Pair(SaysoPrimaryFixed, SaysoPrimary)
+                                    "Setting" -> Pair(SaysoPrimaryFixed, SaysoPrimary)
+                                    "Destination" -> Pair(SaysoPrimaryFixed, SaysoPrimary)
+                                    "To" -> Pair(SaysoTertiaryContainer, SaysoPrimary)
+                                    "Message" -> Pair(SaysoSecondaryContainer, SaysoSecondary)
+                                    "Media" -> Pair(SaysoSecondaryContainer, SaysoSecondary)
+                                    "Time" -> Pair(SaysoTertiaryContainer, SaysoPrimary)
                                     "Item" -> Pair(SaysoSecondaryContainer, SaysoSecondary)
+                                    "Store" -> Pair(SaysoPrimaryFixed, SaysoPrimary)
                                     "App" -> Pair(SaysoTertiaryContainer, SaysoPrimary)
+                                    "Query" -> Pair(SaysoSecondaryContainer, SaysoSecondary)
                                     else -> Pair(SaysoSecondaryContainer, SaysoSecondary)
                                 }
                                 ParamPill(paramLabel, paramVal, bg, fg)
@@ -336,7 +459,7 @@ fun TeachFlowSetupDialog(
                         } else {
                             ParamPill(
                                 "Action",
-                                if (utteranceInput.isBlank()) "Describe task above" else utteranceInput.trim(),
+                                if (utteranceInput.isBlank()) "Speak or describe goal above" else utteranceInput.trim(),
                                 SaysoSecondaryContainer,
                                 SaysoSecondary
                             )
@@ -380,7 +503,7 @@ fun TeachFlowSetupDialog(
                             color = SaysoOnSurface
                         )
                         Text(
-                            text = "Minimizes to home screen to learn your taps",
+                            text = if (detectedPkg != null) detectedPkg else "Minimizes to home screen to learn your taps",
                             fontSize = 11.sp,
                             color = SaysoOnSurfaceVariant
                         )

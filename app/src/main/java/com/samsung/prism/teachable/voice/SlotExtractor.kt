@@ -118,7 +118,7 @@ class SlotExtractor {
             }
         }
 
-        // 5. Address / Location slot
+        // 5. Address / Location / Destination slot
         if (slot.name == "address" || slot.name == "destination" || slot.name == "location") {
             if (!slot.enumValues.isNullOrEmpty()) {
                 val matched = matchEnumSynonym(lower, slot.enumValues)
@@ -127,7 +127,7 @@ class SlotExtractor {
                 }
             }
             val addressRegex = Regex(
-                "(?:deliver to|to|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|app|from)|$)",
+                "(?:deliver to|to|at|directions to|route to)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|app|from)|$)",
                 RegexOption.IGNORE_CASE
             )
             val match = addressRegex.find(rawUtterance)
@@ -142,6 +142,94 @@ class SlotExtractor {
                     }
                     return candidate.replaceFirstChar { it.uppercase() }
                 }
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
+        }
+
+        // 6. Setting slot (e.g. "Airplane mode", "WiFi", "Bluetooth", "Dark theme")
+        if (slot.name == "setting") {
+            val settingMatch = Regex(
+                "(?:toggle|turn\\s+on|turn\\s+off|enable|disable|set|switch)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:in|on|using|via|app)|$)",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            settingMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return cleanExtractedItem(it)
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
+        }
+
+        // 7. Recipient / Contact slot (e.g. "Mom", "John", "Sarah")
+        if (slot.name == "recipient" || slot.name == "contact") {
+            val recipientMatch = Regex(
+                "(?:to|contact|message)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:saying|with|that|on|in|using)|$)",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            recipientMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return cleanExtractedItem(it)
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
+        }
+
+        // 8. Message / Body slot
+        if (slot.name == "message" || slot.name == "body") {
+            val messageMatch = Regex(
+                "(?:saying|that|message)\\s+[\"']?(.+?)[\"']?$",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            messageMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return it
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null) return defaultVal
+        }
+
+        // 9. Media / Song / Audio title
+        if (slot.name == "media" || slot.name == "song") {
+            val mediaMatch = Regex(
+                "(?:play|listen\\s+to)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|by)|$)",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            mediaMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return cleanExtractedItem(it)
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
+        }
+
+        // 10. Time / Alarm slot
+        if (slot.name == "time" || slot.name == "alarm") {
+            val timeMatch = Regex(
+                "(?:for|at)\\s+(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?|\\d+\\s*(?:minutes?|hours?|seconds?))",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            timeMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return it
+            }
+            val defaultVal = slot.defaultValue
+            if (defaultVal != null && lower.contains(defaultVal.lowercase())) {
+                return defaultVal
+            }
+        }
+
+        // 11. Generic query slot
+        if (slot.name == "query") {
+            val queryMatch = Regex(
+                "(?:search\\s+for|look\\s+up|find)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using)|$)",
+                RegexOption.IGNORE_CASE
+            ).find(rawUtterance)
+            queryMatch?.groupValues?.get(1)?.trim()?.let {
+                if (it.isNotEmpty()) return cleanExtractedItem(it)
             }
             val defaultVal = slot.defaultValue
             if (defaultVal != null && lower.contains(defaultVal.lowercase())) {

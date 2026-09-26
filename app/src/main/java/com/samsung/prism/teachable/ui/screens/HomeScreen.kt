@@ -894,6 +894,7 @@ fun HomeScreen(
     // Interactive Dialogs
     if (showTeachSetupDialog) {
         TeachFlowSetupDialog(
+            viewModel = viewModel,
             onDismiss = { showTeachSetupDialog = false },
             onStartTeaching = { utterance, pkg ->
                 showTeachSetupDialog = false

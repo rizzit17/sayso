@@ -84,170 +84,51 @@ class WorkflowGeneralizer {
         )
     }
 
-    private val numberWords = mapOf(
-        "one" to 1, "a" to 1, "an" to 1, "two" to 2, "three" to 3,
-        "four" to 4, "five" to 5, "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10
-    )
 
     private fun extractCandidateSlots(
         utterance: String,
         session: TeachingSession
     ): List<SlotDefinition> {
-        val lower = utterance.lowercase().trim()
         val slots = mutableListOf<SlotDefinition>()
         val existingSlotNames = mutableSetOf<String>()
 
-        // 1. Dynamic Platform Extraction from preposition: "on <Platform>", "in <Platform>", "via <Platform>"
-        val platformRegex = Regex(
-            "(?:on|in|using|via|app)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:and|with|to|deliver|for)|$)",
-            RegexOption.IGNORE_CASE
-        )
-        val platformMatch = platformRegex.find(utterance)
-        val platformValue = platformMatch?.groupValues?.get(1)?.trim()?.replaceFirstChar { it.uppercase() }
-            ?: session.targetPackageHint?.substringAfterLast('.')?.replaceFirstChar { it.uppercase() }
-
-        if (!platformValue.isNullOrBlank() && platformValue.length > 1 && !platformValue.equals("the", ignoreCase = true)) {
-            val enumCandidates = mutableListOf(platformValue)
-
-            slots.add(
-                SlotDefinition(
-                    name = "platform",
-                    type = "enum",
-                    required = true,
-                    defaultValue = platformValue,
-                    enumValues = enumCandidates.distinct()
-                )
-            )
-            existingSlotNames.add("platform")
+        // 1. Extract universal domain parameters (Settings, Messaging, Media, Navigation, Clock, Commerce, Generic)
+        val universalParams = UniversalDomainExtractor.extract(utterance, session.targetPackageHint)
+        val universalSlots = universalParams.toSlotDefinitions()
+        for (slot in universalSlots) {
+            slots.add(slot)
+            existingSlotNames.add(slot.name)
         }
 
-        // 2. Dynamic Restaurant / Store / Source Extraction from preposition: "from <Store>", "at <Store>"
-        val storeRegex = Regex(
-            "(?:from|at)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|via|app|to|deliver|and)|$)",
-            RegexOption.IGNORE_CASE
-        )
-        val storeMatch = storeRegex.find(utterance)
-        val storeValue = storeMatch?.groupValues?.get(1)?.trim()?.let { cleanEntity(it) }
-        if (!storeValue.isNullOrBlank() && storeValue.length > 1 && !existingSlotNames.contains("platform") || storeValue != platformValue) {
-            if (!storeValue.isNullOrBlank() && !storeValue.equals(platformValue, ignoreCase = true)) {
-                slots.add(
-                    SlotDefinition(
-                        name = "restaurant",
-                        type = "string",
-                        required = true,
-                        defaultValue = storeValue
-                    )
-                )
-                existingSlotNames.add("restaurant")
-            }
-        }
-
-        // 3. Dynamic Item Extraction (Prioritize text typed by user during demonstration, else parse from utterance)
+        // 2. Prioritize text typed by user during demonstration (SET_TEXT)
         val typedAction = session.retainedActions.firstOrNull {
             it.actionType == ActionType.SET_TEXT && !it.inputText.isNullOrBlank()
         }
         val itemFromTyped = typedAction?.inputText?.trim()
-        val itemValue = if (!itemFromTyped.isNullOrBlank()) {
-            cleanEntity(itemFromTyped)
-        } else {
-            extractItemFromUtterance(utterance, platformValue, storeValue)
-        }
-
-        if (!itemValue.isNullOrBlank()) {
-            slots.add(
-                SlotDefinition(
-                    name = "item",
-                    type = "string",
-                    required = true,
-                    defaultValue = itemValue
+        if (!itemFromTyped.isNullOrBlank()) {
+            val cleanedTyped = cleanEntity(itemFromTyped)
+            if (!existingSlotNames.contains("item") &&
+                !existingSlotNames.contains("query") &&
+                !existingSlotNames.contains("setting") &&
+                !existingSlotNames.contains("recipient") &&
+                !existingSlotNames.contains("media")
+            ) {
+                slots.add(
+                    SlotDefinition(
+                        name = "item",
+                        type = "string",
+                        required = true,
+                        defaultValue = cleanedTyped
+                    )
                 )
-            )
-            existingSlotNames.add("item")
-        }
-
-        // 4. Dynamic Quantity / Number Extraction
-        val quantityValue = extractQuantity(lower)
-        if (quantityValue != null || lower.contains("order") || lower.contains("buy")) {
-            slots.add(
-                SlotDefinition(
-                    name = "quantity",
-                    type = "integer",
-                    required = false,
-                    defaultValue = (quantityValue ?: 1).toString()
-                )
-            )
-            existingSlotNames.add("quantity")
-        }
-
-        // 5. Dynamic Address / Destination Extraction
-        val addressRegex = Regex(
-            "(?:deliver to|to)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|using|via|app|from|and)|$)",
-            RegexOption.IGNORE_CASE
-        )
-        val addressMatch = addressRegex.find(utterance)
-        val addressCandidate = addressMatch?.groupValues?.get(1)?.trim()?.let { cleanEntity(it) }
-        val excludedLocations = setOf("cart", "bag", "checkout", "basket", "wishlist", "buy", "order")
-        val addressValue = if (!addressCandidate.isNullOrBlank() &&
-            addressCandidate.lowercase() !in excludedLocations &&
-            addressCandidate != platformValue &&
-            addressCandidate != storeValue
-        ) {
-            addressCandidate
-        } else if (lower.contains("order") || lower.contains("deliver")) {
-            "Home"
-        } else {
-            null
-        }
-
-        if (addressValue != null) {
-            slots.add(
-                SlotDefinition(
-                    name = "address",
-                    type = "enum",
-                    required = false,
-                    defaultValue = addressValue,
-                    enumValues = listOf("Home", "Work")
-                )
-            )
-            existingSlotNames.add("address")
+                existingSlotNames.add("item")
+            }
         }
 
         return slots
     }
 
-    private fun extractItemFromUtterance(
-        utterance: String,
-        platform: String?,
-        store: String?
-    ): String? {
-        val itemRegexList = listOf(
-            Regex("(?:order|buy|get|want)\\s+(?:(?:a|an|the|some|one|two|three|four|five|\\d+)\\s+)?([a-zA-Z0-9'\\s]+?)(?:\\s+(?:from|at|on|in|using|to|deliver|and)|$)", RegexOption.IGNORE_CASE),
-            Regex("(?:search\\s+for|search|find)\\s+([a-zA-Z0-9'\\s]+?)(?:\\s+(?:on|in|and|using)|$)", RegexOption.IGNORE_CASE)
-        )
-        for (regex in itemRegexList) {
-            val match = regex.find(utterance)
-            if (match != null) {
-                val candidate = match.groupValues[1].trim()
-                if (candidate.length > 2 && candidate != platform && candidate != store) {
-                    return cleanEntity(candidate)
-                }
-            }
-        }
-        return null
-    }
 
-    private fun extractQuantity(lower: String): Int? {
-        val digitMatch = Regex("\\b(\\d+)\\b").find(lower)
-        if (digitMatch != null) {
-            return digitMatch.groupValues[1].toIntOrNull()
-        }
-        for ((word, num) in numberWords) {
-            if (Regex("\\b$word\\b").containsMatchIn(lower) && word != "a" && word != "an") {
-                return num
-            }
-        }
-        return null
-    }
 
     private fun cleanEntity(raw: String): String {
         var cleaned = raw.trim()
@@ -298,14 +179,19 @@ class WorkflowGeneralizer {
         slots: List<SlotDefinition>
     ): Pair<String, String> {
         val lower = utterance.lowercase().trim()
+        val params = UniversalDomainExtractor.extract(utterance)
 
-        // 1. Dynamic intentTag based on primary action verb
-        val intentTag = when {
-            lower.contains("order") || lower.contains("food") -> "order_food"
-            lower.contains("search") || lower.contains("shop") || lower.contains("cart") || lower.contains("buy") -> "ecommerce_search"
-            else -> {
-                val firstWord = lower.substringBefore(' ').trim()
-                if (firstWord.length > 2) "${firstWord}_action" else "general_automation"
+        // 1. Dynamic intentTag based on domain and verb
+        val intentTag = when (params.domain) {
+            AppDomain.SETTINGS -> "settings_control"
+            AppDomain.MESSAGING -> "messaging_action"
+            AppDomain.MEDIA -> "media_playback"
+            AppDomain.NAVIGATION -> "navigation_route"
+            AppDomain.PRODUCTIVITY_CLOCK -> "productivity_clock"
+            AppDomain.COMMERCE -> if (lower.contains("order") || lower.contains("food")) "order_food" else "ecommerce_search"
+            AppDomain.GENERIC -> {
+                val verb = params.actionVerb?.lowercase()
+                if (!verb.isNullOrBlank() && verb.length > 2) "${verb}_action" else "general_automation"
             }
         }
 

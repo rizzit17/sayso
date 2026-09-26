@@ -2,6 +2,8 @@ package com.samsung.prism.teachable.ai
 
 import android.content.Context
 import android.util.Log
+import com.samsung.prism.teachable.generalization.ExtractedParameters
+import com.samsung.prism.teachable.generalization.UniversalDomainExtractor
 import com.samsung.prism.teachable.generalization.WorkflowGeneralizer
 import com.samsung.prism.teachable.model.SlotDefinition
 import com.samsung.prism.teachable.model.SlotSchema
@@ -75,6 +77,28 @@ class GenAiManager(
 
         // Instant local fallback
         return localIntentMatcher.match(utterance, workflows)
+    }
+
+    /**
+     * Extracts dynamic parameters, target application, and action from user's voice goal.
+     * First attempts Gemini GenAI if configured, otherwise falls back to UniversalDomainExtractor.
+     */
+    suspend fun extractParametersFromGoal(utterance: String): ExtractedParameters {
+        val key = configStore.apiKey
+        if (isGenAiActive && !key.isNullOrBlank()) {
+            val geminiResult = apiClient.extractGoalParameters(
+                utterance = utterance,
+                apiKey = key,
+                model = configStore.selectedModel
+            )
+            if (geminiResult != null) {
+                Log.i(tag, "Gemini extracted parameters: ${geminiResult.toUiChips()}")
+                return geminiResult
+            }
+        }
+
+        // Instant local fallback
+        return UniversalDomainExtractor.extract(utterance)
     }
 
     /**

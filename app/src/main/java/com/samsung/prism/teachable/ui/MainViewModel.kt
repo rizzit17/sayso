@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.samsung.prism.teachable.ai.GeminiConfigStore
 import com.samsung.prism.teachable.ai.GenAiManager
+import com.samsung.prism.teachable.generalization.ExtractedParameters
+import com.samsung.prism.teachable.generalization.UniversalDomainExtractor
 import com.samsung.prism.teachable.generalization.WorkflowGeneralizer
 import com.samsung.prism.teachable.model.Workflow
 import com.samsung.prism.teachable.replay.Orchestrator
@@ -78,6 +80,14 @@ class MainViewModel @JvmOverloads constructor(
 
     val isTeaching: Boolean get() = TeachingRecorder.instance.isRecording
 
+    // Tracks whether the user is in the interactive "Teach a new flow" setup dialog
+    private val _isTeachingSetupActive = MutableStateFlow(false)
+    val isTeachingSetupActive: StateFlow<Boolean> = _isTeachingSetupActive.asStateFlow()
+
+    fun setTeachingSetupActive(active: Boolean) {
+        _isTeachingSetupActive.value = active
+    }
+
     // Gemini API Key & GenAI Configuration State
     private val _geminiApiKey = MutableStateFlow(geminiConfigStore.apiKey ?: "")
     val geminiApiKey: StateFlow<String> = _geminiApiKey.asStateFlow()
@@ -125,11 +135,19 @@ class MainViewModel @JvmOverloads constructor(
     private fun observeSpeechInput() {
         viewModelScope.launch {
             speechToText.recognizedText.collect { text ->
-                if (text.isNotBlank()) {
+                if (text.isNotBlank() && !_isTeachingSetupActive.value && _currentTeachingSession.value == null) {
                     runCommand(text)
                 }
             }
         }
+    }
+
+    suspend fun analyzeGoalWithGemini(utterance: String): ExtractedParameters {
+        return genAiManager.extractParametersFromGoal(utterance)
+    }
+
+    fun analyzeGoalLocally(utterance: String, targetPackageHint: String? = null): ExtractedParameters {
+        return UniversalDomainExtractor.extract(utterance, targetPackageHint)
     }
 
     fun startListening() {

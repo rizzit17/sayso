@@ -1,6 +1,8 @@
 package com.samsung.prism.teachable.ai
 
 import android.util.Log
+import com.samsung.prism.teachable.generalization.AppDomain
+import com.samsung.prism.teachable.generalization.ExtractedParameters
 import com.samsung.prism.teachable.model.SlotDefinition
 import com.samsung.prism.teachable.model.Workflow
 import com.samsung.prism.teachable.stuck.ClarificationActionType
@@ -462,6 +464,123 @@ class GeminiApiClient(
             )
         } catch (e: Exception) {
             Log.w(tag, "understandUtterance failed", e)
+            null
+        }
+    }
+
+    /**
+     * Uses Gemini GenAI to extract target app, action, domain, and dynamic parameter entities
+     * from any user spoken goal across all mobile app categories (Settings, Messaging, Media, Utilities, Maps, Shopping, etc.).
+     */
+    suspend fun extractGoalParameters(
+        utterance: String,
+        apiKey: String,
+        model: String = GeminiConfigStore.DEFAULT_MODEL
+    ): ExtractedParameters? = withContext(Dispatchers.IO) {
+        if (utterance.isBlank()) return@withContext null
+
+        try {
+            val prompt = """
+                You are the intelligent intent and entity extraction engine for SaySo, a universal Android voice automation assistant.
+                The assistant supports automation across ALL kinds of apps on Android, including:
+                - System Settings & Toggles (Airplane mode, Wi-Fi, Bluetooth, Hotspot, Display, Volume, Battery saver)
+                - Messaging & Social (WhatsApp, Telegram, Messages, Gmail, Instagram)
+                - Media & Entertainment (Spotify, YouTube, Music, Camera, Podcasts)
+                - Productivity, Clock & Calendar (Alarms, Timers, Notes/Keep, Calendar events, Reminders, Calculator)
+                - Navigation & Travel (Google Maps, Uber, Transit)
+                - E-Commerce, Food & Services (Amazon, Zomato, Starbucks, Blinkit)
+                - Any general Android app
+                
+                User spoken/written goal: "$utterance"
+                
+                Task:
+                Analyze the command and extract:
+                1. "appName": The name of the target application (e.g. "System Settings", "WhatsApp", "Spotify", "Clock", "YouTube", "Google Maps", "Amazon", or specific app mentioned).
+                2. "targetPackage": Android package name if known (e.g. "com.android.settings", "com.whatsapp", "com.spotify.music", "com.google.android.deskclock", "com.google.android.youtube", "com.google.android.apps.maps", "com.amazon.mShop.android.shopping", or null).
+                3. "actionVerb": The primary action verb (e.g. "Toggle", "Turn on", "Send message", "Play", "Set alarm", "Navigate", "Search", "Order", "Create note").
+                4. "domain": One of "SETTINGS", "MESSAGING", "MEDIA", "PRODUCTIVITY_CLOCK", "NAVIGATION", "COMMERCE", "GENERIC".
+                5. "parameters": A key-value object of all dynamic parameters found. Use standard descriptive keys based on the app domain:
+                   - For Settings: "setting" (e.g. "Airplane Mode", "Wi-Fi", "Bluetooth")
+                   - For Messaging: "recipient" (e.g. "Alex", "Mom"), "message" (e.g. "I'm on my way")
+                   - For Media: "media" or "song" or "video" (e.g. "Bohemian Rhapsody", "documentary")
+                   - For Clock/Calendar: "time" (e.g. "7:30 AM"), "duration" (e.g. "10 minutes"), "title" (e.g. "Team Sync")
+                   - For Navigation: "destination" (e.g. "Central Station", "Airport")
+                   - For Search: "query" (e.g. "pasta recipes")
+                   - For Commerce: "item" (e.g. "Latte"), "store" (e.g. "Starbucks"), "quantity" (e.g. 1), "destination" (e.g. "Home")
+                   - For Generic: "target" (the primary entity acted upon)
+                
+                Respond strictly in JSON format:
+                {
+                  "appName": "System Settings",
+                  "targetPackage": "com.android.settings",
+                  "actionVerb": "Toggle",
+                  "domain": "SETTINGS",
+                  "parameters": {
+                    "setting": "Airplane Mode"
+                  }
+                }
+            """.trimIndent()
+
+            val json = callGeminiForJson(apiKey, model, prompt) ?: return@withContext null
+
+            val appName = json.optString("appName").takeIf { it.isNotBlank() && it != "null" }
+            val targetPkg = json.optString("targetPackage").takeIf { it.isNotBlank() && it != "null" }
+            val actionVerb = json.optString("actionVerb").takeIf { it.isNotBlank() && it != "null" }
+            val domainStr = json.optString("domain", "GENERIC")
+            val domain = runCatching { AppDomain.valueOf(domainStr) }.getOrDefault(AppDomain.GENERIC)
+
+            val paramsObj = json.optJSONObject("parameters")
+            var setting: String? = null
+            var recipient: String? = null
+            var message: String? = null
+            var media: String? = null
+            var query: String? = null
+            var time: String? = null
+            var destination: String? = null
+            var item: String? = null
+            var store: String? = null
+            var qty: Int? = null
+            var target: String? = null
+
+            if (paramsObj != null) {
+                setting = paramsObj.optString("setting").takeIf { it.isNotBlank() && it != "null" }
+                recipient = paramsObj.optString("recipient").takeIf { it.isNotBlank() && it != "null" }
+                message = paramsObj.optString("message").takeIf { it.isNotBlank() && it != "null" }
+                media = (paramsObj.optString("media").takeIf { it.isNotBlank() && it != "null" })
+                    ?: paramsObj.optString("song").takeIf { it.isNotBlank() && it != "null" }
+                    ?: paramsObj.optString("video").takeIf { it.isNotBlank() && it != "null" }
+                query = paramsObj.optString("query").takeIf { it.isNotBlank() && it != "null" }
+                time = (paramsObj.optString("time").takeIf { it.isNotBlank() && it != "null" })
+                    ?: paramsObj.optString("duration").takeIf { it.isNotBlank() && it != "null" }
+                destination = (paramsObj.optString("destination").takeIf { it.isNotBlank() && it != "null" })
+                    ?: paramsObj.optString("location").takeIf { it.isNotBlank() && it != "null" }
+                item = paramsObj.optString("item").takeIf { it.isNotBlank() && it != "null" }
+                store = (paramsObj.optString("store").takeIf { it.isNotBlank() && it != "null" })
+                    ?: paramsObj.optString("restaurant").takeIf { it.isNotBlank() && it != "null" }
+                    ?: paramsObj.optString("merchant").takeIf { it.isNotBlank() && it != "null" }
+                qty = paramsObj.optInt("quantity", 0).takeIf { it > 0 }
+                target = paramsObj.optString("target").takeIf { it.isNotBlank() && it != "null" }
+            }
+
+            ExtractedParameters(
+                appName = appName,
+                targetPackage = targetPkg,
+                actionVerb = actionVerb,
+                primaryTarget = target ?: setting ?: media ?: query ?: item ?: recipient ?: destination,
+                settingName = setting,
+                recipient = recipient,
+                messageContent = message,
+                searchQuery = query,
+                mediaTitle = media,
+                timeOrDuration = time,
+                destination = destination,
+                itemName = item,
+                storeOrSource = store,
+                quantity = qty,
+                domain = domain
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "extractGoalParameters via Gemini failed: ${e.message}")
             null
         }
     }
