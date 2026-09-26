@@ -505,7 +505,8 @@ fun HomeScreen(
                 ClarificationCard(
                     question = question,
                     onOptionSelected = { option -> viewModel.resolveClarification(option) },
-                    onVoiceResponseClick = { viewModel.startListening() }
+                    onVoiceResponseClick = { viewModel.startListening() },
+                    onDismiss = { viewModel.dismissClarification() }
                 )
             }
         }

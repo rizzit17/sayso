@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,6 +58,7 @@ fun ClarificationCard(
     question: ClarificationQuestion,
     onOptionSelected: (ClarificationOption) -> Unit,
     onVoiceResponseClick: () -> Unit,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -99,11 +101,7 @@ fun ClarificationCard(
                 }
 
                 IconButton(
-                    onClick = {
-                        val abort = question.options.firstOrNull { it.actionType == ClarificationActionType.ABORT }
-                            ?: ClarificationOption("abort", "Cancel", actionType = ClarificationActionType.ABORT)
-                        onOptionSelected(abort)
-                    },
+                    onClick = onDismiss,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
@@ -136,7 +134,8 @@ fun ClarificationCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SaysoSurfaceContainerLowest, SubCardShape)
+                            .clip(SubCardShape)
+                            .background(SaysoSurfaceContainerLowest)
                             .clickable { onOptionSelected(option) }
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -189,7 +188,7 @@ fun ClarificationCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Speak Response (e.g. \"Indiranagar\")",
+                    text = "Speak Response (or tap an option)",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 )

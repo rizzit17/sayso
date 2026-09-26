@@ -64,6 +64,15 @@ class Orchestrator(
     private val _boundaryNotification = MutableStateFlow<String?>(null)
     val boundaryNotification: StateFlow<String?> = _boundaryNotification.asStateFlow()
 
+    fun dismissClarification() {
+        _stuckClarification.value = null
+        _boundaryNotification.value = null
+        _state.value = ReplayState.IDLE
+        _statusMessage.value = "Ready"
+        stuckDetector.reset()
+        ttsManager?.stop()
+    }
+
     suspend fun execute(
         utterance: String,
         snapshotProvider: (() -> UiSnapshot?)? = null

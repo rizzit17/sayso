@@ -19,6 +19,7 @@ import com.samsung.prism.teachable.storage.WorkflowRepository
 import com.samsung.prism.teachable.stuck.ClarificationGenerator
 import com.samsung.prism.teachable.stuck.ClarificationOption
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
+import com.samsung.prism.teachable.stuck.ClarificationResult
 import com.samsung.prism.teachable.teaching.TeachingNotificationManager
 import com.samsung.prism.teachable.teaching.TeachingRecorder
 import com.samsung.prism.teachable.teaching.TeachingSession
@@ -136,7 +137,23 @@ class MainViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             speechToText.recognizedText.collect { text ->
                 if (text.isNotBlank() && !_isTeachingSetupActive.value && _currentTeachingSession.value == null) {
-                    runCommand(text)
+                    val activeClarification = orchestrator.stuckClarification.value
+                    if (activeClarification != null) {
+                        val result = orchestrator.clarificationHandler.handleVoiceResponse(text, activeClarification)
+                        orchestrator.dismissClarification()
+                        when (result) {
+                            is ClarificationResult.ResumeWithNode -> {
+                                viewModelScope.launch {
+                                    orchestrator.actionExecutor.executeClick(result.node)
+                                }
+                            }
+                            is ClarificationResult.SkipStep -> { /* dismissed */ }
+                            is ClarificationResult.AbortWorkflow -> { /* dismissed */ }
+                        }
+                        loadData()
+                    } else {
+                        runCommand(text)
+                    }
                 }
             }
         }
@@ -206,11 +223,27 @@ class MainViewModel @JvmOverloads constructor(
 
     fun resolveClarification(option: ClarificationOption) {
         val result = orchestrator.clarificationHandler.handleOptionSelection(option)
-        orchestrator.stuckDetector.reset()
+        orchestrator.dismissClarification()
+        when (result) {
+            is ClarificationResult.ResumeWithNode -> {
+                viewModelScope.launch {
+                    orchestrator.actionExecutor.executeClick(result.node)
+                }
+            }
+            is ClarificationResult.SkipStep -> { /* dismissed */ }
+            is ClarificationResult.AbortWorkflow -> { /* dismissed */ }
+        }
+        loadData()
+    }
+
+    fun dismissClarification() {
+        orchestrator.dismissClarification()
+        loadData()
     }
 
     fun dismissBoundaryAlert() {
-        orchestrator.stuckDetector.reset()
+        orchestrator.dismissClarification()
+        loadData()
     }
 
     // Gemini API Key Management
