@@ -17,6 +17,7 @@ import com.samsung.prism.teachable.stuck.ClarificationGenerator
 import com.samsung.prism.teachable.stuck.ClarificationHandler
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
 import com.samsung.prism.teachable.stuck.ClarificationResult
+import com.samsung.prism.teachable.generalization.UniversalDomainExtractor
 import com.samsung.prism.teachable.stuck.StuckDetector
 import com.samsung.prism.teachable.utility.ISystemUtilityHandler
 import com.samsung.prism.teachable.utility.SystemUtilityResult
@@ -42,7 +43,8 @@ class Orchestrator(
     val clarificationHandler: ClarificationHandler = ClarificationHandler(),
     val boundaryDetector: CredentialBoundaryDetector = CredentialBoundaryDetector(),
     val systemUtilityHandler: ISystemUtilityHandler? = null,
-    var ttsManager: TTSManager? = null
+    var ttsManager: TTSManager? = null,
+    val appLauncher: IAppLauncher? = null
 ) {
     private val tag = "Orchestrator"
 
@@ -82,7 +84,6 @@ class Orchestrator(
     ): RunResult {
         val runId = UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
-        val stepResults = mutableListOf<StepRunResult>()
         stuckDetector.reset()
         _boundaryNotification.value = null
         _stuckClarification.value = null
@@ -162,6 +163,29 @@ class Orchestrator(
             }
         }
 
+        return executeWorkflow(
+            workflow = workflow,
+            utterance = utterance,
+            snapshotProvider = snapshotProvider,
+            existingRunId = runId,
+            existingStartTime = startTime
+        )
+    }
+
+    suspend fun executeWorkflow(
+        workflow: Workflow,
+        utterance: String = workflow.originalUtterance,
+        snapshotProvider: (() -> UiSnapshot?)? = null,
+        existingRunId: String? = null,
+        existingStartTime: Long? = null
+    ): RunResult {
+        val runId = existingRunId ?: UUID.randomUUID().toString()
+        val startTime = existingStartTime ?: System.currentTimeMillis()
+        val stepResults = mutableListOf<StepRunResult>()
+        stuckDetector.reset()
+        _boundaryNotification.value = null
+        _stuckClarification.value = null
+
         _activeWorkflow.value = workflow
         _totalSteps.value = workflow.steps.size
 
@@ -185,6 +209,9 @@ class Orchestrator(
         val boundSteps = workflow.steps.map { parameterBinder.bindStep(it, extraction.boundSlots) }
         ttsManager?.speak("Starting workflow: ${workflow.originalUtterance}")
 
+        // 3b. LAUNCH ASSOCIATED TARGET APP
+        launchAssociatedAppIfNeeded(workflow, boundSteps, snapshotProvider)
+
         // 4. STEP EXECUTION LOOP
         for ((index, step) in boundSteps.withIndex()) {
             _currentStepIndex.value = index + 1
@@ -206,6 +233,7 @@ class Orchestrator(
                     _boundaryNotification.value = "Your turn — I've reached the payment screen. Payment or Credential screen reached ($reason)."
                     ttsManager?.speak("Your turn — I've reached the payment screen.")
                     _statusMessage.value = "Your turn — I've reached the payment screen."
+                    appLauncher?.bringSaysoToFront()
 
                     val res = RunResult(
                         runId = runId,
@@ -252,6 +280,7 @@ class Orchestrator(
                             _stuckClarification.value = question
                             _state.value = ReplayState.ASKING_USER
                             ttsManager?.speak(question.ttsPrompt)
+                            appLauncher?.bringSaysoToFront()
                             val res = RunResult(
                                 runId = runId,
                                 workflowId = workflow.id,
@@ -342,6 +371,78 @@ class Orchestrator(
         )
         repository.recordRun(finalRun)
         return finalRun
+    }
+
+    private suspend fun launchAssociatedAppIfNeeded(
+        workflow: Workflow,
+        steps: List<WorkflowStep>,
+        snapshotProvider: (() -> UiSnapshot?)?
+    ) {
+        val targetPkg = resolveTargetPackage(workflow, steps)
+        Log.i(tag, "Resolved target package for workflow: $targetPkg")
+
+        if (!targetPkg.isNullOrBlank() && targetPkg != "com.samsung.prism.teachable") {
+            _statusMessage.value = "Opening app..."
+            val launched = appLauncher?.launchApp(targetPkg) ?: false
+            Log.i(tag, "Target app launch ($targetPkg) result: $launched")
+
+            if (launched) {
+                val waitStart = System.currentTimeMillis()
+                while (System.currentTimeMillis() - waitStart < 3500) {
+                    delay(300)
+                    val snap = captureSnapshot(snapshotProvider)
+                    if (snap != null && snap.packageName.isNotBlank() && snap.packageName != "com.samsung.prism.teachable") {
+                        Log.i(tag, "Foreground window is now: ${snap.packageName}")
+                        break
+                    }
+                }
+                delay(600)
+            }
+        } else {
+            val snap = captureSnapshot(snapshotProvider)
+            if (snap != null && snap.packageName == "com.samsung.prism.teachable") {
+                Log.i(tag, "SaySo is in foreground without explicit target package; minimizing to home")
+                appLauncher?.minimizeToHome()
+                delay(800)
+            }
+        }
+    }
+
+    private fun resolveTargetPackage(workflow: Workflow, steps: List<WorkflowStep>): String? {
+        val primary = workflow.primaryPackage
+        if (!primary.isNullOrBlank() && primary != "com.samsung.prism.teachable") {
+            return primary
+        }
+
+        val supported = workflow.supportedPackages.firstOrNull {
+            it.isNotBlank() && it != "com.samsung.prism.teachable" && it != "com.android.systemui"
+        }
+        if (supported != null) return supported
+
+        val fromTransition = steps.mapNotNull { it.expectedStateTransition.expectedPackageName }
+            .firstOrNull { it.isNotBlank() && it != "com.samsung.prism.teachable" && it != "com.android.systemui" }
+        if (fromTransition != null) return fromTransition
+
+        val fromResId = steps.mapNotNull { it.target.resourceId?.substringBefore(':') }
+            .firstOrNull { it.isNotBlank() && it != "com.samsung.prism.teachable" && it.contains(".") && it != "android" }
+        if (fromResId != null) return fromResId
+
+        val extracted = UniversalDomainExtractor.extract(workflow.originalUtterance)
+        if (!extracted.targetPackage.isNullOrBlank() && extracted.targetPackage != "com.samsung.prism.teachable") {
+            return extracted.targetPackage
+        }
+
+        val lower = workflow.originalUtterance.lowercase()
+        val allStepText = steps.joinToString(" ") { "${it.target.text} ${it.target.contentDescription}" }.lowercase()
+        if (lower.contains("setting") || lower.contains("wifi") || lower.contains("wi-fi") ||
+            lower.contains("network") || lower.contains("bluetooth") || lower.contains("hotspot") ||
+            lower.contains("airplane") || allStepText.contains("network & internet") ||
+            allStepText.contains("connected devices") || allStepText.contains("hotspot")
+        ) {
+            return "com.android.settings"
+        }
+
+        return null
     }
 
     private fun captureSnapshot(provider: (() -> UiSnapshot?)?): UiSnapshot? {

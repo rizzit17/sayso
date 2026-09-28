@@ -68,7 +68,13 @@ class WorkflowGeneralizer {
 
         // Generate generalized canonical intent representation
         val (intentTag, canonicalIntent) = generateCanonicalIntent(utterance, detectedSlots)
-        val supportedPackages = retained.map { it.packageName }.distinct()
+
+        // Deduce supported packages from hint, utterance domain extraction, and observed actions
+        val detectedFromUtterance = UniversalDomainExtractor.extract(utterance, session.targetPackageHint).targetPackage
+        val supportedPackages = (listOfNotNull(session.targetPackageHint, detectedFromUtterance) + retained.map { it.packageName })
+            .filter { it.isNotBlank() && it != "com.samsung.prism.teachable" && it != "com.android.systemui" }
+            .distinct()
+            .ifEmpty { retained.map { it.packageName }.distinct() }
 
         return Workflow(
             id = workflowId,

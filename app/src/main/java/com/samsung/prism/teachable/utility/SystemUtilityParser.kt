@@ -17,6 +17,11 @@ object SystemUtilityParser {
         val raw = utterance.trim()
         if (raw.isBlank()) return null
         val lower = raw.lowercase(Locale.ROOT)
+            .replace("p.m.", "pm")
+            .replace("p. m.", "pm")
+            .replace("a.m.", "am")
+            .replace("a. m.", "am")
+            .replace("o' clock", "o'clock")
 
         // 1. Flashlight / Torch
         parseFlashlight(lower)?.let { return it }
@@ -148,53 +153,112 @@ object SystemUtilityParser {
         val isAlarm = lower.contains("alarm") || lower.contains("wake me up") || lower.contains("wake up")
         if (!isAlarm) return null
 
+        val hasPm = Regex("\\b(?:pm|p m)\\b").containsMatchIn(lower) ||
+                lower.contains("evening") ||
+                lower.contains("afternoon") ||
+                lower.contains("night") ||
+                lower.contains("tonight")
+
+        val hasAm = Regex("\\b(?:am|a m)\\b").containsMatchIn(lower) ||
+                lower.contains("morning")
+
+        // Pattern 0: Relative Alarms e.g. "wake me up in 3 hours", "wake me up in 3hours", "wake me up in 30 minutes", "set alarm in 2 hours"
+        val isRelative = Regex("\\b(?:in|after)\\s+(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|an?)\\s*(?:hour|hr|minute|min)", RegexOption.IGNORE_CASE).containsMatchIn(lower)
+        if (isRelative) {
+            var relHours = 0
+            var relMinutes = 0
+
+            val hourMatch = Regex("(?:in|after)\\s+(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|an?)\\s*(?:hour|hr)s?", RegexOption.IGNORE_CASE).find(lower)
+            if (hourMatch != null) {
+                val str = hourMatch.groupValues[1].lowercase(Locale.ROOT)
+                relHours = if (str == "a" || str == "an") 1 else (str.toIntOrNull() ?: wordToNumber[str] ?: 0)
+            }
+
+            val minMatch = Regex("(\\d+|one|two|three|four|five|ten|fifteen|twenty|thirty|forty-five)\\s*(?:minute|min)s?", RegexOption.IGNORE_CASE).find(lower)
+            if (minMatch != null) {
+                val str = minMatch.groupValues[1].lowercase(Locale.ROOT)
+                relMinutes = str.toIntOrNull() ?: wordToNumber[str] ?: 0
+            }
+
+            if (relHours > 0 || relMinutes > 0) {
+                val cal = Calendar.getInstance().apply {
+                    add(Calendar.HOUR_OF_DAY, relHours)
+                    add(Calendar.MINUTE, relMinutes)
+                }
+                val label = extractAlarmLabel(raw) ?: "Wake Up"
+                return SystemUtilityAction.SetAlarm(
+                    hour = cal.get(Calendar.HOUR_OF_DAY),
+                    minute = cal.get(Calendar.MINUTE),
+                    message = label
+                )
+            }
+        }
+
         // 1. Time patterns:
-        // Pattern A: "7:30 AM", "7:30pm", "06:45"
-        val timeColonMatch = Regex("(\\d{1,2}):(\\d{2})\\s*(am|pm)?", RegexOption.IGNORE_CASE).find(lower)
+        // Pattern A: "5:42 PM", "5:42pm", "5:42 p.m.", "06:45"
+        val timeColonMatch = Regex("(\\d{1,2}):(\\d{2})(?:\\s*(am|pm))?", RegexOption.IGNORE_CASE).find(lower)
         if (timeColonMatch != null) {
             var hour = timeColonMatch.groupValues[1].toInt()
             val minute = timeColonMatch.groupValues[2].toInt()
-            val amPm = timeColonMatch.groupValues[3].lowercase(Locale.ROOT)
+            val localAmPm = timeColonMatch.groupValues[3].lowercase(Locale.ROOT)
 
-            if (amPm == "pm" && hour < 12) hour += 12
-            if (amPm == "am" && hour == 12) hour = 0
+            val isPm = localAmPm == "pm" || (localAmPm.isEmpty() && hasPm)
+            val isAm = localAmPm == "am" || (localAmPm.isEmpty() && hasAm)
+
+            if (isPm && hour < 12) hour += 12
+            if (isAm && hour == 12) hour = 0
 
             val message = extractAlarmLabel(raw)
             return SystemUtilityAction.SetAlarm(hour = hour, minute = minute, message = message)
         }
 
-        // Pattern B: "7 AM", "6 pm", "seven am", "eight o'clock"
-        val timeSimpleMatch = Regex("(?:at|for)\\s+(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s*(am|pm|o'clock)?", RegexOption.IGNORE_CASE).find(lower)
+        // Pattern B: "5 42 pm", "5 42"
+        val timeSpaceMatch = Regex("(?:at|for)?\\s*(\\d{1,2})\\s+(\\d{2})(?:\\s*(am|pm))?", RegexOption.IGNORE_CASE).find(lower)
+        if (timeSpaceMatch != null) {
+            var hour = timeSpaceMatch.groupValues[1].toInt()
+            val minute = timeSpaceMatch.groupValues[2].toInt()
+            if (hour in 0..23 && minute in 0..59) {
+                val localAmPm = timeSpaceMatch.groupValues[3].lowercase(Locale.ROOT)
+                val isPm = localAmPm == "pm" || (localAmPm.isEmpty() && hasPm)
+                val isAm = localAmPm == "am" || (localAmPm.isEmpty() && hasAm)
+
+                if (isPm && hour < 12) hour += 12
+                if (isAm && hour == 12) hour = 0
+
+                val message = extractAlarmLabel(raw)
+                return SystemUtilityAction.SetAlarm(hour = hour, minute = minute, message = message)
+            }
+        }
+
+        // Pattern C: "7 AM", "6 pm", "seven am", "eight o'clock"
+        val timeSimpleMatch = Regex("(?:at|for|up at)\\s+(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\\s*(am|pm|o'clock))?", RegexOption.IGNORE_CASE).find(lower)
         if (timeSimpleMatch != null) {
             val hourStr = timeSimpleMatch.groupValues[1]
             var hour = hourStr.toIntOrNull() ?: wordToNumber[hourStr] ?: 0
-            val amPm = timeSimpleMatch.groupValues[2].lowercase(Locale.ROOT)
+            val localAmPm = timeSimpleMatch.groupValues[2].lowercase(Locale.ROOT)
 
-            if (amPm == "pm" && hour < 12) hour += 12
-            if (amPm == "am" && hour == 12) hour = 0
+            val isPm = localAmPm == "pm" || (localAmPm.isEmpty() && hasPm)
+            val isAm = localAmPm == "am" || (localAmPm.isEmpty() && hasAm)
 
-            // If no AM/PM specified, check morning / evening context
-            if (amPm.isBlank() || amPm == "o'clock") {
-                if (lower.contains("evening") || lower.contains("night")) {
-                    if (hour < 12) hour += 12
-                }
-            }
+            if (isPm && hour < 12) hour += 12
+            if (isAm && hour == 12) hour = 0
 
             val message = extractAlarmLabel(raw)
             return SystemUtilityAction.SetAlarm(hour = hour, minute = 0, message = message)
         }
 
-        // Pattern C: "wake me up at 6"
-        val wakeMatch = Regex("wake\\s+(?:me\\s+)?up\\s+(?:tomorrow\\s+)?at\\s+(\\d{1,2})\\s*(am|pm)?", RegexOption.IGNORE_CASE).find(lower)
+        // Pattern D: "wake me up at 6"
+        val wakeMatch = Regex("wake\\s+(?:me\\s+)?up\\s+(?:tomorrow\\s+)?at\\s+(\\d{1,2})(?:\\s*(am|pm))?", RegexOption.IGNORE_CASE).find(lower)
         if (wakeMatch != null) {
             var hour = wakeMatch.groupValues[1].toInt()
-            val amPm = wakeMatch.groupValues[2].lowercase(Locale.ROOT)
-            if (amPm == "pm" && hour < 12) hour += 12
-            if (amPm == "am" && hour == 12) hour = 0
-            // Default wake up without AM/PM is usually AM
-            if (amPm.isBlank() && hour in 4..11) {
-                // morning
-            }
+            val localAmPm = wakeMatch.groupValues[2].lowercase(Locale.ROOT)
+
+            val isPm = localAmPm == "pm" || (localAmPm.isEmpty() && hasPm)
+            val isAm = localAmPm == "am" || (localAmPm.isEmpty() && hasAm)
+
+            if (isPm && hour < 12) hour += 12
+            if (isAm && hour == 12) hour = 0
+
             return SystemUtilityAction.SetAlarm(hour = hour, minute = 0, message = "Wake Up")
         }
 
@@ -202,11 +266,20 @@ object SystemUtilityParser {
     }
 
     private fun extractAlarmLabel(raw: String): String? {
-        val labelMatch = Regex("(?:called|named|with message|with note|with label|for)\\s+([a-zA-Z0-9\\s]+)$", RegexOption.IGNORE_CASE).find(raw)
+        val contextualFor = Regex("(?:for)\\s+([a-zA-Z]+)\\s+at\\s+", RegexOption.IGNORE_CASE).find(raw)
+        if (contextualFor != null) {
+            val label = contextualFor.groupValues[1].trim()
+            if (!label.equals("alarm", ignoreCase = true)) return label
+        }
+
+        val labelMatch = Regex("(?:called|named|with message|with note|with label)\\s+([a-zA-Z0-9\\s]+)$", RegexOption.IGNORE_CASE).find(raw)
         return labelMatch?.groupValues?.get(1)?.trim()?.takeIf {
             !it.startsWith("tomorrow", ignoreCase = true) &&
                     !it.startsWith("morning", ignoreCase = true) &&
-                    !it.startsWith("evening", ignoreCase = true)
+                    !it.startsWith("evening", ignoreCase = true) &&
+                    !it.startsWith("am", ignoreCase = true) &&
+                    !it.startsWith("pm", ignoreCase = true) &&
+                    !it.matches(Regex("\\d+.*"))
         }
     }
 
@@ -235,14 +308,17 @@ object SystemUtilityParser {
         }
 
         // Look for time e.g. "at 5 PM", "at 10:30 AM", "at 3"
-        val timeMatch = Regex("(?:at|for)\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", RegexOption.IGNORE_CASE).find(lower)
+        val timeMatch = Regex("(?:at|for)\\s+(\\d{1,2})(?::(\\d{2}))?(?:\\s*(am|pm))?", RegexOption.IGNORE_CASE).find(lower)
         if (timeMatch != null) {
             var hour = timeMatch.groupValues[1].toInt()
             val minute = timeMatch.groupValues[2].takeIf { it.isNotBlank() }?.toInt() ?: 0
-            val amPm = timeMatch.groupValues[3].lowercase(Locale.ROOT)
+            val localAmPm = timeMatch.groupValues[3].lowercase(Locale.ROOT)
 
-            if (amPm == "pm" && hour < 12) hour += 12
-            if (amPm == "am" && hour == 12) hour = 0
+            val isPm = localAmPm == "pm" || (localAmPm.isEmpty() && (lower.contains("pm") || lower.contains("evening") || lower.contains("afternoon")))
+            val isAm = localAmPm == "am" || (localAmPm.isEmpty() && (lower.contains("am") || lower.contains("morning")))
+
+            if (isPm && hour < 12) hour += 12
+            if (isAm && hour == 12) hour = 0
 
             cal.set(Calendar.HOUR_OF_DAY, hour)
             cal.set(Calendar.MINUTE, minute)

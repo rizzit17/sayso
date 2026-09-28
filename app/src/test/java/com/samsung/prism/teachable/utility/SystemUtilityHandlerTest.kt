@@ -61,6 +61,40 @@ class SystemUtilityHandlerTest {
         assertEquals(30, action2.minute)
         assertEquals("Workout", action2.message)
 
+        // 5:42 PM exact test (uppercase, lowercase, p.m. with dot, space separated)
+        val action542Pm = SystemUtilityParser.parse("set alarm for 5:42 PM")
+        assertTrue(action542Pm is SystemUtilityAction.SetAlarm)
+        val alarm542 = action542Pm as SystemUtilityAction.SetAlarm
+        assertEquals(17, alarm542.hour)
+        assertEquals(42, alarm542.minute)
+        assertEquals("5:42 PM", alarm542.formattedTime)
+        assertNull(alarm542.message) // "for 5:42 PM" must not be parsed as label!
+
+        val action542Dot = SystemUtilityParser.parse("set alarm for 5:42 p.m.")
+        assertTrue(action542Dot is SystemUtilityAction.SetAlarm)
+        assertEquals(17, (action542Dot as SystemUtilityAction.SetAlarm).hour)
+        assertEquals(42, action542Dot.minute)
+
+        val action542Space = SystemUtilityParser.parse("set alarm for 5 42 pm")
+        assertTrue(action542Space is SystemUtilityAction.SetAlarm)
+        assertEquals(17, (action542Space as SystemUtilityAction.SetAlarm).hour)
+        assertEquals(42, action542Space.minute)
+
+        val action542Evening = SystemUtilityParser.parse("set alarm at 5:42 in the evening")
+        assertTrue(action542Evening is SystemUtilityAction.SetAlarm)
+        assertEquals(17, (action542Evening as SystemUtilityAction.SetAlarm).hour)
+        assertEquals(42, action542Evening.minute)
+
+        // Relative Alarm tests: "wake me up in 3hours" / "wake me up in 3 hours"
+        val actionRelNoSpace = SystemUtilityParser.parse("wake me up in 3hours")
+        assertTrue(actionRelNoSpace is SystemUtilityAction.SetAlarm)
+
+        val actionRelSpace = SystemUtilityParser.parse("wake me up in 3 hours")
+        assertTrue(actionRelSpace is SystemUtilityAction.SetAlarm)
+
+        val actionRelMin = SystemUtilityParser.parse("wake me up in 30 minutes")
+        assertTrue(actionRelMin is SystemUtilityAction.SetAlarm)
+
         // Simple text alarm
         val action3 = SystemUtilityParser.parse("Wake me up at 8 AM")
         assertTrue(action3 is SystemUtilityAction.SetAlarm)

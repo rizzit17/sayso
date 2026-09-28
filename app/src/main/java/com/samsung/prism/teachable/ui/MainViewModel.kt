@@ -9,6 +9,7 @@ import com.samsung.prism.teachable.generalization.ExtractedParameters
 import com.samsung.prism.teachable.generalization.UniversalDomainExtractor
 import com.samsung.prism.teachable.generalization.WorkflowGeneralizer
 import com.samsung.prism.teachable.model.Workflow
+import com.samsung.prism.teachable.replay.AndroidAppLauncher
 import com.samsung.prism.teachable.replay.Orchestrator
 import com.samsung.prism.teachable.replay.ReplayState
 import com.samsung.prism.teachable.retrieval.WorkflowRetriever
@@ -43,8 +44,9 @@ class MainViewModel @JvmOverloads constructor(
         repository = repository,
         retriever = WorkflowRetriever(repository, genAiManager = genAiManager),
         clarificationGenerator = ClarificationGenerator(genAiManager),
-        systemUtilityHandler = AndroidSystemUtilityHandler(application),
-        ttsManager = TTSManager(application)
+        systemUtilityHandler = AndroidSystemUtilityHandler(application, genAiManager),
+        ttsManager = TTSManager(application),
+        appLauncher = AndroidAppLauncher(application)
     ),
     val speechToText: SpeechToText = SpeechToText(application)
 ) : AndroidViewModel(application) {
@@ -146,6 +148,11 @@ class MainViewModel @JvmOverloads constructor(
                         when (result) {
                             is ClarificationResult.ResumeWithNode -> {
                                 viewModelScope.launch {
+                                    val targetPkg = orchestrator.activeWorkflow.value?.primaryPackage
+                                    if (!targetPkg.isNullOrBlank()) {
+                                        orchestrator.appLauncher?.launchApp(targetPkg)
+                                        kotlinx.coroutines.delay(600)
+                                    }
                                     orchestrator.actionExecutor.executeClick(result.node)
                                 }
                             }
@@ -180,6 +187,13 @@ class MainViewModel @JvmOverloads constructor(
     fun runCommand(utterance: String) {
         viewModelScope.launch {
             orchestrator.execute(utterance)
+            loadData()
+        }
+    }
+
+    fun simulateWorkflow(workflow: Workflow) {
+        viewModelScope.launch {
+            orchestrator.executeWorkflow(workflow)
             loadData()
         }
     }
@@ -229,6 +243,11 @@ class MainViewModel @JvmOverloads constructor(
         when (result) {
             is ClarificationResult.ResumeWithNode -> {
                 viewModelScope.launch {
+                    val targetPkg = orchestrator.activeWorkflow.value?.primaryPackage
+                    if (!targetPkg.isNullOrBlank()) {
+                        orchestrator.appLauncher?.launchApp(targetPkg)
+                        kotlinx.coroutines.delay(600)
+                    }
                     orchestrator.actionExecutor.executeClick(result.node)
                 }
             }

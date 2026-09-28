@@ -12,6 +12,8 @@ import com.samsung.prism.teachable.stuck.ClarificationGenerator
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
 import com.samsung.prism.teachable.stuck.StuckContext
 import com.samsung.prism.teachable.teaching.TeachingSession
+import com.samsung.prism.teachable.utility.SystemUtilityAction
+import com.samsung.prism.teachable.utility.SystemUtilityParser
 import com.samsung.prism.teachable.voice.IntentMatchResult
 import com.samsung.prism.teachable.voice.IntentMatcher
 
@@ -99,6 +101,29 @@ class GenAiManager(
 
         // Instant local fallback
         return UniversalDomainExtractor.extract(utterance)
+    }
+
+    /**
+     * Intelligently parses system utilities using Gemini GenAI.
+     * Handles complex natural language, relative times ("wake me up in 3hours"), and exact AM/PM bindings.
+     * Automatically falls back to local SystemUtilityParser when offline or without API key.
+     */
+    suspend fun parseSystemUtility(utterance: String): SystemUtilityAction? {
+        val key = configStore.apiKey
+        if (isGenAiActive && !key.isNullOrBlank()) {
+            val geminiAction = apiClient.parseSystemUtilityWithGemini(
+                utterance = utterance,
+                apiKey = key,
+                model = configStore.selectedModel
+            )
+            if (geminiAction != null) {
+                Log.i(tag, "Gemini parsed system utility: $geminiAction")
+                return geminiAction
+            }
+        }
+
+        // Instant local fallback
+        return SystemUtilityParser.parse(utterance)
     }
 
     /**

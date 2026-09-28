@@ -10,6 +10,7 @@ import com.samsung.prism.teachable.stuck.ClarificationOption
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
 import com.samsung.prism.teachable.stuck.StuckContext
 import com.samsung.prism.teachable.teaching.TeachingSession
+import com.samsung.prism.teachable.utility.SystemUtilityAction
 import com.samsung.prism.teachable.voice.MatchType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,6 +21,10 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 import javax.net.ssl.HttpsURLConnection
 
 data class GeminiIntentResult(
@@ -581,6 +586,126 @@ class GeminiApiClient(
             )
         } catch (e: Exception) {
             Log.w(tag, "extractGoalParameters via Gemini failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Uses Google Gemini GenAI to intelligently parse complex, natural, or relative device utility commands
+     * (e.g. "wake me up in 3hours", "set alarm for 5:42 PM", "turn on flashlight", "remind me tomorrow to call doctor").
+     */
+    suspend fun parseSystemUtilityWithGemini(
+        utterance: String,
+        apiKey: String,
+        model: String = GeminiConfigStore.DEFAULT_MODEL,
+        currentDateTime: Calendar = Calendar.getInstance()
+    ): SystemUtilityAction? = withContext(Dispatchers.IO) {
+        if (utterance.isBlank()) return@withContext null
+
+        try {
+            val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss, EEEE, hh:mm a", Locale.US).format(currentDateTime.time)
+            val prompt = """
+                You are the AI System Utility Interpreter for SaySo, a GenAI voice assistant running on Android.
+                Current device date & time: "$timeFormat" (Timezone: ${TimeZone.getDefault().id}).
+                
+                User command: "$utterance"
+                
+                Task:
+                Determine if this command is a built-in device utility action:
+                - ALARM (e.g. "set alarm for 5:42 PM", "wake me up in 3hours", "alarm at 7", "show alarms")
+                - TIMER (e.g. "set timer for 10 minutes", "start a 5 min timer", "show timers")
+                - CALENDAR (e.g. "add reminder to call Mom at 5 PM tomorrow", "create event Team Sync at 3 PM on calendar")
+                - FLASHLIGHT (e.g. "turn on flashlight", "torch on", "switch off torch")
+                - SETTINGS (e.g. "open Wi-Fi settings", "bluetooth settings", "display settings", "open settings")
+                
+                If it is a 3rd-party app task (like ordering food on Zomato, booking an Uber, shopping on Amazon, social media) or general chat, set "isUtility": false.
+                
+                If it is a built-in utility:
+                1. "ALARM":
+                   - "hour": integer from 0 to 23 (24-hour format). CRITICAL: PM times must be 12-23 (e.g. 5:42 PM -> 17, 6 PM -> 18, 12 PM noon -> 12, 12 AM midnight -> 0).
+                   - "minute": integer from 0 to 59.
+                   - For relative expressions (e.g. "wake me up in 3hours", "in 45 minutes"), calculate current device time + duration to find target 24-hr hour and minute.
+                   - "label": optional string label or null.
+                   - "action": "SET_ALARM" or "SHOW_ALARMS".
+                2. "TIMER":
+                   - "durationSeconds": total seconds (integer).
+                   - "label": optional timer label or null.
+                   - "action": "SET_TIMER" or "SHOW_TIMERS".
+                3. "CALENDAR":
+                   - "title": event or reminder title.
+                   - "startMillis": epoch timestamp in milliseconds for event start.
+                   - "endMillis": epoch timestamp in milliseconds for event end.
+                4. "FLASHLIGHT":
+                   - "enable": boolean (true for on, false for off).
+                5. "SETTINGS":
+                   - "settingName": string (e.g. "Wi-Fi", "Bluetooth", "Display", "Sound", "Battery", "Settings").
+                   - "intentAction": one of "android.settings.WIFI_SETTINGS", "android.settings.BLUETOOTH_SETTINGS", "android.settings.DISPLAY_SETTINGS", "android.settings.SOUND_SETTINGS", "android.settings.BATTERY_SAVER_SETTINGS", "android.settings.SETTINGS".
+                
+                Respond strictly in valid JSON:
+                {
+                  "isUtility": true,
+                  "utilityType": "ALARM",
+                  "action": "SET_ALARM",
+                  "hour": 17,
+                  "minute": 42,
+                  "label": null
+                }
+                or
+                {
+                  "isUtility": false
+                }
+            """.trimIndent()
+
+            val json = callGeminiForJson(apiKey, model, prompt) ?: return@withContext null
+            val isUtility = json.optBoolean("isUtility", false)
+            if (!isUtility) return@withContext null
+
+            val utilityType = json.optString("utilityType", "").uppercase(Locale.ROOT)
+            val actionType = json.optString("action", "").uppercase(Locale.ROOT)
+
+            when (utilityType) {
+                "ALARM" -> {
+                    if (actionType == "SHOW_ALARMS" || json.optBoolean("showAlarms", false)) {
+                        SystemUtilityAction.ShowAlarms
+                    } else {
+                        val hour = json.optInt("hour", -1)
+                        val minute = json.optInt("minute", 0)
+                        if (hour in 0..23 && minute in 0..59) {
+                            val label = json.optString("label").takeIf { it.isNotBlank() && it != "null" }
+                            SystemUtilityAction.SetAlarm(hour = hour, minute = minute, message = label)
+                        } else null
+                    }
+                }
+                "TIMER" -> {
+                    if (actionType == "SHOW_TIMERS" || json.optBoolean("showTimers", false)) {
+                        SystemUtilityAction.ShowTimers
+                    } else {
+                        val duration = json.optInt("durationSeconds", 0)
+                        if (duration > 0) {
+                            val label = json.optString("label").takeIf { it.isNotBlank() && it != "null" }
+                            SystemUtilityAction.SetTimer(durationSeconds = duration, message = label)
+                        } else null
+                    }
+                }
+                "CALENDAR" -> {
+                    val title = json.optString("title", "Event")
+                    val startMillis = json.optLong("startMillis", System.currentTimeMillis() + 3600000)
+                    val endMillis = json.optLong("endMillis", startMillis + 3600000)
+                    SystemUtilityAction.AddCalendarEvent(title = title, startMillis = startMillis, endMillis = endMillis)
+                }
+                "FLASHLIGHT" -> {
+                    val enable = json.optBoolean("enable", true)
+                    SystemUtilityAction.ToggleFlashlight(enable = enable)
+                }
+                "SETTINGS" -> {
+                    val settingName = json.optString("settingName", "Settings")
+                    val intentAction = json.optString("intentAction", android.provider.Settings.ACTION_SETTINGS)
+                    SystemUtilityAction.OpenSettings(settingName = settingName, intentAction = intentAction)
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "parseSystemUtilityWithGemini failed: ${e.message}")
             null
         }
     }

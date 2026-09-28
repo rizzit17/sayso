@@ -1001,8 +1001,9 @@ fun HomeScreen(
                 reviewWorkflow = null
             },
             onSimulateTest = {
+                val wf = workflow
                 reviewWorkflow = null
-                viewModel.runCommand(workflow.originalUtterance)
+                viewModel.simulateWorkflow(wf)
             }
         )
     }

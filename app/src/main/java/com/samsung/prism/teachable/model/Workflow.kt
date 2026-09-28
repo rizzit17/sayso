@@ -98,7 +98,7 @@ data class Workflow(
     val updatedAt: Long = System.currentTimeMillis(),
     val version: Int = 1
 ) {
-    val primaryPackage: String? get() = supportedPackages.firstOrNull()
+    val primaryPackage: String? get() = supportedPackages.firstOrNull { it.isNotBlank() && it != "com.samsung.prism.teachable" }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

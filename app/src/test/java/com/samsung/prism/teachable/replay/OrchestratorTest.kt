@@ -191,4 +191,86 @@ class OrchestratorTest {
             assertEquals(ReplayState.FAILED, orchestrator.state.value)
         }
     }
+
+    @Test
+    fun testAssociatedAppLaunchedBeforeWorkflowReplay() = runBlocking {
+        val fakeLauncher = FakeAppLauncher()
+        val testOrchestrator = Orchestrator(
+            repository = repository,
+            actionExecutor = fakeActionExecutor,
+            appLauncher = fakeLauncher
+        )
+
+        val snapshotProvider = {
+            createSnapshot(listOf(searchBoxNode, dominosCardNode), "sig_test")
+        }
+
+        testOrchestrator.executeWorkflow(pizzaWorkflow, snapshotProvider = snapshotProvider)
+
+        assertTrue("Expected com.application.zomato to be launched", fakeLauncher.launchedPackages.contains("com.application.zomato"))
+    }
+
+    @Test
+    fun testSettingsAppResolvedAndLaunchedFromUtteranceAndSteps() = runBlocking {
+        val settingsWorkflow = Workflow(
+            id = "wf_wifi_toggle",
+            intentTag = "toggle_wifi",
+            originalUtterance = "Turn off Wi-Fi in network settings",
+            generalizedIntent = "Turn off Wi-Fi in network settings",
+            supportedPackages = emptyList(), // Intentionally empty to test fallback inference
+            steps = listOf(
+                WorkflowStep(
+                    id = "step_net",
+                    workflowId = "wf_wifi_toggle",
+                    stepOrder = 0,
+                    actionType = ActionType.CLICK,
+                    target = StepTarget(text = "Network & internetMobile, Wi-Fi, hotspot")
+                )
+            )
+        )
+        repository.save(settingsWorkflow)
+
+        val fakeLauncher = FakeAppLauncher()
+        val testOrchestrator = Orchestrator(
+            repository = repository,
+            actionExecutor = fakeActionExecutor,
+            appLauncher = fakeLauncher
+        )
+
+        val settingsNode = UiNode(text = "Network & internetMobile, Wi-Fi, hotspot", clickable = true)
+        val snapshotProvider = {
+            UiSnapshot(
+                packageName = "com.android.settings",
+                rootNode = UiNode(children = listOf(settingsNode))
+            )
+        }
+
+        testOrchestrator.executeWorkflow(settingsWorkflow, snapshotProvider = snapshotProvider)
+
+        assertTrue(
+            "Expected com.android.settings to be launched for settings workflow",
+            fakeLauncher.launchedPackages.contains("com.android.settings")
+        )
+    }
+
+    class FakeAppLauncher : IAppLauncher {
+        val launchedPackages = mutableListOf<String>()
+        var minimizedToHome = false
+        var broughtSaysoToFront = false
+
+        override suspend fun launchApp(packageName: String): Boolean {
+            launchedPackages.add(packageName)
+            return true
+        }
+
+        override suspend fun minimizeToHome(): Boolean {
+            minimizedToHome = true
+            return true
+        }
+
+        override suspend fun bringSaysoToFront(): Boolean {
+            broughtSaysoToFront = true
+            return true
+        }
+    }
 }
