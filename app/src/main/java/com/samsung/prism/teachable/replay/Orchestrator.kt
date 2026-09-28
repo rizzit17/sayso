@@ -18,6 +18,8 @@ import com.samsung.prism.teachable.stuck.ClarificationHandler
 import com.samsung.prism.teachable.stuck.ClarificationQuestion
 import com.samsung.prism.teachable.stuck.ClarificationResult
 import com.samsung.prism.teachable.stuck.StuckDetector
+import com.samsung.prism.teachable.utility.ISystemUtilityHandler
+import com.samsung.prism.teachable.utility.SystemUtilityResult
 import com.samsung.prism.teachable.voice.SlotExtractor
 import com.samsung.prism.teachable.voice.TTSManager
 import kotlinx.coroutines.delay
@@ -39,6 +41,7 @@ class Orchestrator(
     val clarificationGenerator: ClarificationGenerator = ClarificationGenerator(),
     val clarificationHandler: ClarificationHandler = ClarificationHandler(),
     val boundaryDetector: CredentialBoundaryDetector = CredentialBoundaryDetector(),
+    val systemUtilityHandler: ISystemUtilityHandler? = null,
     var ttsManager: TTSManager? = null
 ) {
     private val tag = "Orchestrator"
@@ -83,6 +86,48 @@ class Orchestrator(
         stuckDetector.reset()
         _boundaryNotification.value = null
         _stuckClarification.value = null
+
+        // 0. FAST-PATH: System Utilities (Alarms, Timers, Calendar, Flashlight, Settings)
+        if (systemUtilityHandler != null && systemUtilityHandler.canHandle(utterance)) {
+            val existingExactWorkflow = repository.findActive().firstOrNull {
+                it.originalUtterance.equals(utterance, ignoreCase = true)
+            }
+            if (existingExactWorkflow == null) {
+                _state.value = ReplayState.EXECUTING_STEP
+                _statusMessage.value = "Executing system utility..."
+                val utilityResult = systemUtilityHandler.execute(utterance)
+                if (utilityResult is SystemUtilityResult.Success) {
+                    _state.value = ReplayState.COMPLETED
+                    _statusMessage.value = utilityResult.message
+                    ttsManager?.speak(utilityResult.message)
+                    val res = RunResult(
+                        runId = runId,
+                        workflowId = "system_utility",
+                        workflowTitle = utterance,
+                        startedAt = startTime,
+                        endedAt = System.currentTimeMillis(),
+                        status = RunStatus.COMPLETED
+                    )
+                    repository.recordRun(res)
+                    return res
+                } else if (utilityResult is SystemUtilityResult.Failed) {
+                    _state.value = ReplayState.FAILED
+                    _statusMessage.value = utilityResult.reason
+                    ttsManager?.speak(utilityResult.reason)
+                    val res = RunResult(
+                        runId = runId,
+                        workflowId = "system_utility",
+                        workflowTitle = utterance,
+                        startedAt = startTime,
+                        endedAt = System.currentTimeMillis(),
+                        status = RunStatus.FAILED,
+                        failureReason = utilityResult.reason
+                    )
+                    repository.recordRun(res)
+                    return res
+                }
+            }
+        }
 
         // 1. RETRIEVING
         _state.value = ReplayState.RETRIEVING

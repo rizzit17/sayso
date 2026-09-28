@@ -23,6 +23,7 @@ import com.samsung.prism.teachable.stuck.ClarificationResult
 import com.samsung.prism.teachable.teaching.TeachingNotificationManager
 import com.samsung.prism.teachable.teaching.TeachingRecorder
 import com.samsung.prism.teachable.teaching.TeachingSession
+import com.samsung.prism.teachable.utility.AndroidSystemUtilityHandler
 import com.samsung.prism.teachable.voice.SpeechToText
 import com.samsung.prism.teachable.voice.TTSManager
 import com.samsung.prism.teachable.voice.VoiceInputState
@@ -42,6 +43,7 @@ class MainViewModel @JvmOverloads constructor(
         repository = repository,
         retriever = WorkflowRetriever(repository, genAiManager = genAiManager),
         clarificationGenerator = ClarificationGenerator(genAiManager),
+        systemUtilityHandler = AndroidSystemUtilityHandler(application),
         ttsManager = TTSManager(application)
     ),
     val speechToText: SpeechToText = SpeechToText(application)

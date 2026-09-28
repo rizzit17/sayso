@@ -533,6 +533,26 @@ Synthesizes clarification questions with candidate chips from visible interactiv
 **FILE FUNCTION:**  
 Implements Bonus B3. Processes user resolution to stuck questions via either direct UI tap or spoken voice commands.
 
+### SystemUtilityModels.kt [utility/SystemUtilityModels.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/utility/SystemUtilityModels.kt)
+**FILE FUNCTION:**  
+Defines core data models and sealed hierarchies for system utility actions: `UtilityType`, `SystemUtilityAction` (`SetAlarm`, `SetTimer`, `AddCalendarEvent`, `ToggleFlashlight`, `OpenSettings`, `ShowAlarms`, `ShowTimers`), and `SystemUtilityResult`.
+
+### SystemUtilityParser.kt [utility/SystemUtilityParser.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/utility/SystemUtilityParser.kt)
+**FILE FUNCTION:**  
+Natural language parser converting spoken or typed utility utterances (e.g. "Set an alarm for 7:00 AM", "Set a timer for 10 minutes", "Add reminder to call Mom at 5 PM tomorrow", "Turn on flashlight", "Open Wi-Fi settings") into structured `SystemUtilityAction`s with word-number resolution and timestamp calculations.
+
+### ISystemUtilityHandler.kt [utility/ISystemUtilityHandler.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/utility/ISystemUtilityHandler.kt)
+**FILE FUNCTION:**  
+Contract interface exposing `canHandle(utterance)`, `parseUtilityAction(utterance)`, and `execute(action)` for zero-teach fast-path execution.
+
+### AndroidSystemUtilityHandler.kt [utility/AndroidSystemUtilityHandler.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/utility/AndroidSystemUtilityHandler.kt)
+**FILE FUNCTION:**  
+Native Android implementation executing utility actions using platform Intents and OS services: `AlarmClock.ACTION_SET_ALARM`, `AlarmClock.ACTION_SET_TIMER`, `CalendarContract.Events.CONTENT_URI`, `CameraManager.setTorchMode()`, and `Settings` action panels with zero external SDK overhead.
+
+### FakeSystemUtilityHandler.kt [utility/FakeSystemUtilityHandler.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/utility/FakeSystemUtilityHandler.kt)
+**FILE FUNCTION:**  
+In-memory mock implementation of `ISystemUtilityHandler` recording executed actions for headless testing and deterministic unit test assertions.
+
 ### Entities.kt [storage/Entities.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/storage/Entities.kt)
 **FILE FUNCTION:**  
 Defines Room SQLite database entities: `WorkflowEntity`, `WorkflowStepEntity`, `RunEntity`, `RunStepEntity`, and `AppRegistryEntity`.
@@ -696,4 +716,9 @@ Tests JSON serialization and deserialization of `Workflow`, `WorkflowStep`, `Ste
 ### GeminiIntegrationTest.kt [ai/GeminiIntegrationTest.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/test/java/com/samsung/prism/teachable/ai/GeminiIntegrationTest.kt)
 **FILE FUNCTION:**  
 Validates Google Gemini integration: verifies model list and defaults, tests markdown code block stripping, validates structured JSON parsing for intent matching and slot extraction, verifies schema synthesis decoding, and validates the zero-failure local offline fallback engine.
+
+### SystemUtilityHandlerTest.kt [utility/SystemUtilityHandlerTest.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/test/java/com/samsung/prism/teachable/utility/SystemUtilityHandlerTest.kt)
+**FILE FUNCTION:**  
+Exhaustively tests the system utility subsystem: validates natural language parsing of alarm variations (AM/PM, 24h, custom labels, show alarms), timer durations (hours, minutes, seconds, show timers), calendar event and reminder dates/times, flashlight/torch toggle states, and settings panels. Verifies `Orchestrator` zero-teach fast-path execution, run logging, and confirms that custom user-taught workflows take precedence over default system actions when exact matches exist.
+
 

@@ -499,6 +499,44 @@ fun HomeScreen(
             }
         }
 
+        // 4b. Built-in Utilities Quick Actions
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val quickActions = listOf(
+                    "⏰ Alarm 7:00 AM" to "Set an alarm for 7:00 AM",
+                    "⏱️ 5-min Timer" to "Set a timer for 5 minutes",
+                    "📅 Reminder on Calendar" to "Add a reminder to call Mom at 5 PM tomorrow",
+                    "🔦 Torch On" to "Turn on flashlight",
+                    "🔦 Torch Off" to "Turn off flashlight",
+                    "⚙️ Wi-Fi Settings" to "Open Wi-Fi settings"
+                )
+                quickActions.forEach { (label, command) ->
+                    Box(
+                        modifier = Modifier
+                            .background(SaysoSurfaceContainerLow, PillShape)
+                            .clickable {
+                                manualTextInput = command
+                                viewModel.runCommand(command)
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SaysoOnSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         // 5. Active Clarification / Handoff Notifications
         stuckQuestion?.let { question ->
             item {
