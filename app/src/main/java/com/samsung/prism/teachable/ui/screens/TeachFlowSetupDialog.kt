@@ -12,6 +12,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -371,7 +373,7 @@ fun TeachFlowSetupDialog(
                             onValueChange = { utteranceInput = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("Spoken Goal / Utterance") },
-                            placeholder = { Text("e.g. Turn off Airplane mode in Settings, or Find route to Central Park in Maps") },
+                            placeholder = { Text("e.g. Toggle airplane mode from settings") },
                             shape = SubCardShape,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = SaysoPrimary,
@@ -380,6 +382,43 @@ fun TeachFlowSetupDialog(
                                 unfocusedContainerColor = SaysoSurfaceContainerLowest
                             )
                         )
+
+                        // Quick suggestion pills
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val suggestions = listOf(
+                                "Toggle airplane mode from settings",
+                                "Turn on airplane mode",
+                                "Order Margherita pizza on Zomato"
+                            )
+                            for (suggestion in suggestions) {
+                                Row(
+                                    modifier = Modifier
+                                        .background(SaysoSurfaceContainerHigh, ChipShape)
+                                        .clickable { utteranceInput = suggestion }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = SaysoPrimary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = suggestion,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = SaysoOnSurface
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -513,11 +552,11 @@ fun TeachFlowSetupDialog(
                 // Action Controls
                 Button(
                     onClick = {
-                        if (utteranceInput.isNotBlank()) {
-                            onStartTeaching(utteranceInput.trim(), detectedPkg)
-                        }
+                        val finalUtterance = utteranceInput.trim().ifBlank { "Toggle airplane mode from settings" }
+                        val finalPkg = detectedPkg ?: if (finalUtterance.contains("airplane", ignoreCase = true) || finalUtterance.contains("setting", ignoreCase = true)) "com.android.settings" else null
+                        onStartTeaching(finalUtterance, finalPkg)
                     },
-                    enabled = utteranceInput.isNotBlank(),
+                    enabled = true,
                     shape = PillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SaysoPrimary,

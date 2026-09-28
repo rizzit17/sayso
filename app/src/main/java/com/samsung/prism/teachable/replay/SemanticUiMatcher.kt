@@ -8,7 +8,7 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 class SemanticUiMatcher(
-    var matchThreshold: Double = 0.70
+    var matchThreshold: Double = 0.60
 ) {
     // 8-signal hierarchy weights per systemdesign.md §7.2
     val w1 = 0.30 // exact resource-id
@@ -82,10 +82,12 @@ class SemanticUiMatcher(
         signals["w8_coordinates"] = s8 * w8
 
         val totalScore = signals.values.sum()
+        // Strong semantic boost when text/label matches with high confidence
+        val textBonus = if (s2 >= 0.90) 0.30 else if (s2 >= 0.75) 0.15 else 0.0
 
         return MatchCandidate(
             node = candidate,
-            score = min(1.0, totalScore),
+            score = min(1.0, totalScore + textBonus),
             signals = signals
         )
     }
@@ -156,6 +158,33 @@ class SemanticUiMatcher(
                 best = max(best, 0.90)
             } else {
                 best = max(best, stringSimilarity(normTargetDesc, normCandText))
+            }
+        }
+
+        // 5. Text vs Candidate Parent Context (e.g. Switch labeled by row header)
+        val normCandParent = cand.parentContext?.trim()?.lowercase()
+            ?.replace(Regex("[^a-z0-9\\s]"), "")?.replace(Regex("\\s+"), " ")?.trim()
+        if (!normTargetText.isNullOrEmpty() && !normCandParent.isNullOrEmpty()) {
+            if (normTargetText == normCandParent) {
+                best = max(best, 0.95)
+            } else if (normCandParent.contains(normTargetText) || normTargetText.contains(normCandParent)) {
+                best = max(best, 0.85)
+            }
+        }
+
+        // 6. Text vs Candidate Children (e.g. Container holding label and switch)
+        if (!normTargetText.isNullOrEmpty()) {
+            for (child in cand.children) {
+                val childText = child.text?.trim()?.lowercase()
+                    ?.replace(Regex("[^a-z0-9\\s]"), "")?.replace(Regex("\\s+"), " ")?.trim()
+                val childDesc = child.contentDescription?.trim()?.lowercase()
+                    ?.replace(Regex("[^a-z0-9\\s]"), "")?.replace(Regex("\\s+"), " ")?.trim()
+                if (childText == normTargetText || childDesc == normTargetText) {
+                    best = max(best, 0.95)
+                    break
+                } else if (childText != null && (childText.contains(normTargetText) || normTargetText.contains(childText))) {
+                    best = max(best, 0.85)
+                }
             }
         }
 

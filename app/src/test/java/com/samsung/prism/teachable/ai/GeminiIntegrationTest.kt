@@ -118,6 +118,74 @@ class GeminiIntegrationTest {
     }
 
     @Test
+    fun testGeminiCompleteWorkflowSynthesisParsing() {
+        val mockWorkflowJson = JSONObject().apply {
+            put("intentTag", "settings_toggle_airplane_mode")
+            put("generalizedIntent", "Turn {state} airplane mode")
+            put("supportedPackages", JSONArray().apply {
+                put("com.android.settings")
+            })
+            put("slots", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("name", "state")
+                    put("type", "string")
+                    put("required", false)
+                    put("defaultValue", "on")
+                })
+            })
+            put("steps", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("stepOrder", 0)
+                    put("actionType", "CLICK")
+                    put("packageName", "com.android.settings")
+                    put("target", JSONObject().apply {
+                        put("text", "Network & internet")
+                        put("resourceId", "android:id/title")
+                        put("semanticRole", "button")
+                    })
+                    put("explanation", "Open Network & internet settings")
+                })
+                put(JSONObject().apply {
+                    put("stepOrder", 1)
+                    put("actionType", "CLICK")
+                    put("packageName", "com.android.settings")
+                    put("target", JSONObject().apply {
+                        put("text", "Airplane mode")
+                        put("resourceId", "android:id/switch_widget")
+                        put("semanticRole", "switch")
+                    })
+                    put("slotBinding", "state")
+                    put("explanation", "Toggle the Airplane mode switch")
+                })
+            })
+        }
+
+        val intentTag = mockWorkflowJson.getString("intentTag")
+        val generalizedIntent = mockWorkflowJson.getString("generalizedIntent")
+        val supportedPackages = mockWorkflowJson.getJSONArray("supportedPackages")
+        val slots = mockWorkflowJson.getJSONArray("slots")
+        val steps = mockWorkflowJson.getJSONArray("steps")
+
+        assertEquals("settings_toggle_airplane_mode", intentTag)
+        assertEquals("Turn {state} airplane mode", generalizedIntent)
+        assertEquals(1, supportedPackages.length())
+        assertEquals("com.android.settings", supportedPackages.getString(0))
+        assertEquals(1, slots.length())
+        assertEquals("state", slots.getJSONObject(0).getString("name"))
+        assertEquals(2, steps.length())
+
+        val step0 = steps.getJSONObject(0)
+        assertEquals("CLICK", step0.getString("actionType"))
+        assertEquals("Network & internet", step0.getJSONObject("target").getString("text"))
+
+        val step1 = steps.getJSONObject(1)
+        assertEquals("CLICK", step1.getString("actionType"))
+        assertEquals("Airplane mode", step1.getJSONObject("target").getString("text"))
+        assertEquals("switch", step1.getJSONObject("target").getString("semanticRole"))
+        assertEquals("state", step1.getString("slotBinding"))
+    }
+
+    @Test
     fun testGeminiClarificationQuestionBuilding() {
         val candidate = UiNode(
             resourceId = "node_1",

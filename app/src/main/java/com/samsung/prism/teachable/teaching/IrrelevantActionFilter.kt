@@ -44,9 +44,9 @@ class IrrelevantActionFilter(
 
         // 1. Phone Call / Dialer interruption check (Bonus B1 primary use-case)
         val hint = session.targetPackageHint
-        val isTargetApp = (hint != null && targetPkg.contains(hint, ignoreCase = true)) ||
+        val isTargetApp = (hint != null && (targetPkg.contains(hint, ignoreCase = true) || hint.contains(targetPkg, ignoreCase = true))) ||
                 isIntentRelated(session.originalUtterance, targetPkg) ||
-                targetPkg == "com.android.settings"
+                targetPkg.contains("settings", ignoreCase = true)
 
         val isInterruptionPkg = !isTargetApp && interruptionPackages.any { targetPkg.contains(it, ignoreCase = true) }
         val matchesInterruptionWord = interruptionKeywords.any { lowerText.contains(it) }
@@ -80,11 +80,18 @@ class IrrelevantActionFilter(
         }
 
         if (expectedPkg != null) {
-            if (!isLauncher && targetPkg != expectedPkg) {
-                // Allow system permission dialogs or system keyboards
+            val isMatchingExpected = targetPkg == expectedPkg ||
+                    targetPkg.contains(expectedPkg, ignoreCase = true) ||
+                    expectedPkg.contains(targetPkg, ignoreCase = true) ||
+                    (targetPkg.contains("settings", ignoreCase = true) && expectedPkg.contains("settings", ignoreCase = true))
+
+            if (!isLauncher && !isMatchingExpected) {
+                // Allow system permission dialogs, system keyboards, and settings sub-packages
                 val isSystemDialog = targetPkg == "com.google.android.packageinstaller" ||
                         targetPkg == "com.android.permissioncontroller" ||
-                        targetPkg == "android"
+                        targetPkg == "android" ||
+                        targetPkg.contains("settings", ignoreCase = true) ||
+                        (targetPkg.contains("systemui", ignoreCase = true) && !isReturningToSayso)
 
                 if (!isSystemDialog) {
                     return FilterEvaluation(

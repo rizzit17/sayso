@@ -253,6 +253,78 @@ class OrchestratorTest {
         )
     }
 
+    @Test
+    fun testMultiStepAirplaneModeWorkflowReplay() = runBlocking {
+        val airplaneWorkflow = Workflow(
+            id = "wf_airplane_mode",
+            intentTag = "toggle_airplane",
+            originalUtterance = "Turn on airplane mode",
+            generalizedIntent = "Turn on airplane mode",
+            supportedPackages = listOf("com.android.settings"),
+            steps = listOf(
+                WorkflowStep(
+                    id = "step_network",
+                    workflowId = "wf_airplane_mode",
+                    stepOrder = 0,
+                    actionType = ActionType.CLICK,
+                    target = StepTarget(text = "Network & internetMobile, Wi-Fi, hotspot")
+                ),
+                WorkflowStep(
+                    id = "step_airplane",
+                    workflowId = "wf_airplane_mode",
+                    stepOrder = 1,
+                    actionType = ActionType.CLICK,
+                    target = StepTarget(
+                        text = "Airplane mode",
+                        className = "android.widget.Switch",
+                        semanticRole = "switch"
+                    )
+                )
+            )
+        )
+        repository.save(airplaneWorkflow)
+
+        val netNode = UiNode(text = "Network & internetMobile, Wi-Fi, hotspot", clickable = true)
+        val airplaneRow = UiNode(
+            className = "android.widget.LinearLayout",
+            clickable = true,
+            children = listOf(
+                UiNode(text = "Airplane mode", className = "android.widget.TextView", clickable = false),
+                UiNode(resourceId = "android:id/switch_widget", className = "android.widget.Switch", clickable = true)
+            )
+        )
+
+        var callCount = 0
+        val snapshotProvider = {
+            callCount++
+            if (callCount <= 2) {
+                // Step 0: root settings screen
+                UiSnapshot(
+                    packageName = "com.android.settings",
+                    rootNode = UiNode(children = listOf(netNode))
+                )
+            } else {
+                // Step 1: network & internet sub-page
+                UiSnapshot(
+                    packageName = "com.android.settings",
+                    rootNode = UiNode(children = listOf(airplaneRow))
+                )
+            }
+        }
+
+        val testOrchestrator = Orchestrator(
+            repository = repository,
+            actionExecutor = fakeActionExecutor
+        )
+
+        val result = testOrchestrator.executeWorkflow(airplaneWorkflow, snapshotProvider = snapshotProvider)
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(ReplayState.COMPLETED, testOrchestrator.state.value)
+        assertEquals(2, result.stepResults.size)
+        assertEquals(2, fakeActionExecutor.executedClicks.size)
+    }
+
     class FakeAppLauncher : IAppLauncher {
         val launchedPackages = mutableListOf<String>()
         var minimizedToHome = false

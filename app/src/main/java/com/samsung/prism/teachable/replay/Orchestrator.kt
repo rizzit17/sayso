@@ -220,9 +220,27 @@ class Orchestrator(
             var stepExecuted = false
             var attempts = 0
 
+            // Settle delay between steps on real devices to allow activity/fragment transitions to complete
+            if (index > 0 && snapshotProvider == null) {
+                delay(600)
+            }
+
             while (!stepExecuted && attempts < 3) {
                 attempts++
-                val snapshotBefore = captureSnapshot(snapshotProvider) ?: UiSnapshot.EMPTY
+
+                // Wait up to 3000ms for the target element to become visible on the screen
+                var match: MatchCandidate? = null
+                var snapshotBefore = captureSnapshot(snapshotProvider) ?: UiSnapshot.EMPTY
+                val waitStart = System.currentTimeMillis()
+
+                while (true) {
+                    match = uiMatcher.findBestMatch(step.target, snapshotBefore)
+                    if (match != null || System.currentTimeMillis() - waitStart >= 3000 || snapshotProvider != null) {
+                        break
+                    }
+                    delay(300)
+                    snapshotBefore = captureSnapshot(snapshotProvider) ?: UiSnapshot.EMPTY
+                }
 
                 // 4a. SAFETY CHECK: Check Credential / Payment Boundary
                 val boundaryCheck = boundaryDetector.checkBoundary(snapshotBefore)
@@ -255,7 +273,9 @@ class Orchestrator(
                 _state.value = ReplayState.EXECUTING_STEP
                 _statusMessage.value = "On it."
 
-                var match = uiMatcher.findBestMatch(step.target, snapshotBefore)
+                if (match == null) {
+                    match = uiMatcher.findBestMatch(step.target, snapshotBefore)
+                }
 
                 if (match == null) {
                     // Trigger Recovery Manager
@@ -316,7 +336,7 @@ class Orchestrator(
 
                 // 4d. VERIFYING_STATE
                 _state.value = ReplayState.VERIFYING_STATE
-                delay(300)
+                delay(if (snapshotProvider == null) 500L else 300L)
                 val snapshotAfter = captureSnapshot(snapshotProvider) ?: snapshotBefore
 
                 val verification = stateVerifier.verify(step.expectedStateTransition, snapshotBefore, snapshotAfter)
@@ -326,7 +346,7 @@ class Orchestrator(
                         StepRunResult(
                             stepId = step.id,
                             outcome = "SUCCESS",
-                            confidence = match.score,
+                            confidence = match?.score ?: 1.0,
                             recoveryInvoked = attempts > 1
                         )
                     )

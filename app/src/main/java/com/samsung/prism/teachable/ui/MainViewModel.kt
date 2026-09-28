@@ -79,6 +79,9 @@ class MainViewModel @JvmOverloads constructor(
     private val _lastLearnedWorkflow = MutableStateFlow<Workflow?>(null)
     val lastLearnedWorkflow: StateFlow<Workflow?> = _lastLearnedWorkflow.asStateFlow()
 
+    private val _isSynthesizingWorkflow = MutableStateFlow(false)
+    val isSynthesizingWorkflow: StateFlow<Boolean> = _isSynthesizingWorkflow.asStateFlow()
+
     fun clearLastLearnedWorkflow() {
         _lastLearnedWorkflow.value = null
     }
@@ -123,7 +126,7 @@ class MainViewModel @JvmOverloads constructor(
                     TeachingNotificationManager.updateActionCount(
                         context = getApplication(),
                         utterance = session.originalUtterance,
-                        actionCount = session.retainedActions.size
+                        actionCount = session.rawActions.size
                     )
                 }
             }
@@ -219,13 +222,18 @@ class MainViewModel @JvmOverloads constructor(
     fun stopTeachingAndSave() {
         TeachingNotificationManager.dismissTeachingNotification(getApplication())
         val session = TeachingRecorder.instance.stopSession() ?: return
-        if (session.retainedActions.isNotEmpty()) {
+        if (session.rawActions.isNotEmpty() || session.retainedActions.isNotEmpty()) {
             viewModelScope.launch {
-                val workflow = genAiManager.generalizeWorkflow(session)
-                repository.save(workflow)
-                loadData()
-                _lastLearnedWorkflow.value = workflow
-                orchestrator.ttsManager?.speak("Learned: ${workflow.originalUtterance}")
+                _isSynthesizingWorkflow.value = true
+                try {
+                    val workflow = genAiManager.generalizeWorkflow(session)
+                    repository.save(workflow)
+                    loadData()
+                    _lastLearnedWorkflow.value = workflow
+                    orchestrator.ttsManager?.speak("Learned: ${workflow.originalUtterance}")
+                } finally {
+                    _isSynthesizingWorkflow.value = false
+                }
             }
         }
         _currentTeachingSession.value = null

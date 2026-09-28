@@ -24,6 +24,9 @@ data class TeachingSession(
     val retainedActions: List<RawAction>
         get() = rawActions.filter { !it.isFiltered }
 
+    val allActions: List<RawAction>
+        get() = rawActions
+
     val filteredActions: List<RawAction>
         get() = rawActions.filter { it.isFiltered }
 

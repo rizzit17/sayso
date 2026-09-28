@@ -49,6 +49,31 @@ data class GeminiSchemaResult(
     val stepBindings: Map<Int, String> // step index (0-based) -> slot name
 )
 
+data class GeminiStepSynthesis(
+    val stepOrder: Int,
+    val actionType: String,
+    val targetText: String? = null,
+    val targetContentDescription: String? = null,
+    val targetResourceId: String? = null,
+    val targetSemanticRole: String? = null,
+    val targetParentContext: String? = null,
+    val domainConcept: String? = null,
+    val inputText: String? = null,
+    val slotBinding: String? = null,
+    val isBoundary: Boolean = false,
+    val expectedTextSubstring: String? = null,
+    val expectedPackage: String? = null,
+    val explanation: String? = null
+)
+
+data class GeminiWorkflowResult(
+    val intentTag: String,
+    val generalizedIntent: String,
+    val supportedPackages: List<String>,
+    val slots: List<GeminiSlotSynthesis>,
+    val steps: List<GeminiStepSynthesis>
+)
+
 data class GeminiValidationResult(
     val isSuccess: Boolean,
     val message: String,
@@ -296,6 +321,250 @@ class GeminiApiClient(
             )
         } catch (e: Exception) {
             Log.w(tag, "generateStuckClarification failed", e)
+            null
+        }
+    }
+
+    /**
+     * Synthesizes a complete, production-ready Workflow directly from recorded demonstration steps using Gemini.
+     */
+    suspend fun synthesizeCompleteWorkflow(
+        session: TeachingSession,
+        apiKey: String,
+        model: String = GeminiConfigStore.DEFAULT_MODEL
+    ): GeminiWorkflowResult? = withContext(Dispatchers.IO) {
+        val trimmedKey = apiKey.trim()
+        val allEvents = session.rawActions.ifEmpty { session.retainedActions }
+        if (trimmedKey.isEmpty() || allEvents.isEmpty()) {
+            return@withContext null
+        }
+
+        val userQuery = session.originalUtterance.ifBlank { "toggle airplane mode from settings" }
+        Log.i(tag, "synthesizeCompleteWorkflow: sending all ${allEvents.size} events to Gemini with query: '$userQuery'")
+
+        try {
+            val actionsJson = JSONArray().apply {
+                allEvents.forEachIndexed { idx, action ->
+                    put(JSONObject().apply {
+                        put("stepIndex", idx)
+                        put("actionType", action.actionType.name)
+                        put("packageName", action.packageName)
+                        put("semanticDescription", action.semanticDescription)
+                        if (!action.inputText.isNullOrBlank()) {
+                            put("inputText", action.inputText)
+                        }
+                        val nodeObj = JSONObject().apply {
+                            action.targetNode.text?.takeIf { it.isNotBlank() }?.let { put("text", it) }
+                            action.targetNode.contentDescription?.takeIf { it.isNotBlank() }?.let { put("contentDescription", it) }
+                            action.targetNode.resourceId?.takeIf { it.isNotBlank() }?.let { put("resourceId", it) }
+                            action.targetNode.className?.takeIf { it.isNotBlank() }?.let { put("className", it) }
+                            action.targetNode.semanticRole?.takeIf { it.isNotBlank() }?.let { put("semanticRole", it) }
+                            action.targetNode.parentContext?.takeIf { it.isNotBlank() }?.let { put("parentContext", it) }
+                            put("clickable", action.targetNode.clickable)
+                            if (!action.targetNode.bounds.isEmpty()) {
+                                put("bounds", JSONObject().apply {
+                                    put("left", action.targetNode.bounds.left)
+                                    put("top", action.targetNode.bounds.top)
+                                    put("right", action.targetNode.bounds.right)
+                                    put("bottom", action.targetNode.bounds.bottom)
+                                })
+                            }
+                        }
+                        put("targetElement", nodeObj)
+                        action.screenBefore.activityName?.takeIf { it.isNotBlank() }?.let { put("screenActivity", it) }
+                        put("screenSignature", action.screenBefore.screenSignature)
+                    })
+                }
+            }
+
+            val prompt = """
+                You are SaySo AI Workflow Synthesizer, an autonomous on-device Android task automation and learning intelligence system.
+                The user taught SaySo a new mobile workflow by demonstrating the steps on their Android device.
+                
+                User voice command / query: "$userQuery"
+                Target app hint: "${session.targetPackageHint ?: "com.android.settings"}"
+                Total events captured: ${allEvents.size}
+                
+                Here are ALL the recorded user interaction events and screen states:
+                $actionsJson
+                
+                Your task:
+                The user's goal is: "$userQuery".
+                Analyze ALL the captured demonstration events above. Identify the key navigation and action steps needed to fulfill "$userQuery", filter out any accidental or redundant taps, and synthesize a complete, production-ready, generalized Android automation Workflow.
+                
+                Instructions:
+                1. INTENT & DOMAIN GENERALIZATION:
+                   - "intentTag": Short, canonical snake_case tag describing the specific task (e.g. "settings_toggle_airplane_mode", "food_order_cart", "send_whatsapp_message", "clock_set_alarm").
+                   - "generalizedIntent": A generalized voice command template using {slot_name} placeholders for any variable parameters (e.g. "Turn {state} airplane mode", "Order {item} from {restaurant}", "Set alarm for {time}"). If no parameters are variable, make it a clean, natural intent phrase.
+                   - "supportedPackages": A list of Android package names involved in this workflow (e.g. ["com.android.settings"]).
+                
+                2. PARAMETERS & SLOTS:
+                   - Extract any dynamic parameters from the voice command and the user's typed inputs (e.g., query, item, quantity, contact, state, time, address).
+                   - "slots": Array of slot definitions:
+                     [
+                       {
+                         "name": "slot_name",
+                         "type": "string",
+                         "required": true,
+                         "defaultValue": "the default or demonstrated value"
+                       }
+                     ]
+                
+                3. WORKFLOW STEPS & END-TO-END COMPLETION:
+                   - The synthesized workflow MUST successfully achieve the user's end goal: "$userQuery".
+                   - Filter out accidental touch jitter or spurious scroll events (e.g. SCROLL_FORWARD on lists or headers) when the target item is already on that screen.
+                   - CRITICAL REQUIREMENT FOR GOAL COMPLETION:
+                     If the user's query is to toggle or adjust a setting (e.g. "toggle airplane mode from settings", "turn on airplane mode", "turn off wi-fi", "bluetooth"), the workflow MUST contain the complete, actionable path ending in toggling that target setting!
+                     For example, for "toggle airplane mode from settings":
+                     Step 0: CLICK "Network & internet" (or "Connections" depending on OS)
+                     Step 1: CLICK "Airplane mode" (resourceId: "android:id/switch_widget" or "android:id/title", semanticRole: "switch")
+                     Even if the user's recorded demonstration stopped right before the switch was clicked or registered touch jitter as a scroll, YOU MUST INCLUDE the final target click step so the workflow actually fulfills the user's goal!
+                   - Review each recorded step in sequence.
+                   - Consolidate or filter out any accidental misclicks or duplicate taps if present.
+                   - For every executable step, produce:
+                     - "stepOrder": 0-indexed sequence number (0, 1, 2, ...)
+                     - "actionType": One of "CLICK", "SET_TEXT", "SCROLL_FORWARD", "SCROLL_BACKWARD", "LONG_CLICK"
+                     - "packageName": Target package name (e.g. "com.android.settings")
+                     - "target":
+                       - "text": Primary display text or label to find (e.g. "Network & internet", "Airplane mode")
+                       - "contentDescription": Accessibility description if relevant (or null)
+                       - "resourceId": Android view resource ID if relevant (e.g. "android:id/title", "android:id/switch_widget")
+                       - "semanticRole": e.g. "button", "switch", "input_field", "list_item", "checkbox"
+                       - "parentContext": Surrounding header/parent text to disambiguate the item
+                       - "domainConcept": Semantic domain concept if applicable (e.g. "network_settings", "airplane_mode_switch", "search_bar")
+                     - "inputText": Text to type if SET_TEXT, or null
+                     - "slotBinding": The name of the slot bound to this step (e.g. "item", "query", "state") if variable, or null
+                     - "isBoundary": true ONLY if this step involves a critical irreversible action (e.g. payment confirmation, place order, delete data); false for normal navigation/toggles
+                     - "expectedTransition":
+                       - "expectedTextSubstring": Key text expected to appear after this action (or null)
+                       - "expectedPackage": Package expected after this action
+                     - "explanation": 1-line explanation of what this step does
+                
+                Respond STRICTLY with valid JSON matching this exact structure:
+                {
+                  "intentTag": "...",
+                  "generalizedIntent": "...",
+                  "supportedPackages": ["..."],
+                  "slots": [
+                    {
+                      "name": "...",
+                      "type": "string",
+                      "required": true,
+                      "defaultValue": "..."
+                    }
+                  ],
+                  "steps": [
+                    {
+                      "stepOrder": 0,
+                      "actionType": "CLICK",
+                      "packageName": "...",
+                      "target": {
+                        "text": "...",
+                        "contentDescription": null,
+                        "resourceId": "...",
+                        "semanticRole": "...",
+                        "parentContext": "...",
+                        "domainConcept": "..."
+                      },
+                      "inputText": null,
+                      "slotBinding": null,
+                      "isBoundary": false,
+                      "expectedTransition": {
+                        "expectedTextSubstring": "...",
+                        "expectedPackage": "..."
+                      },
+                      "explanation": "..."
+                    }
+                  ]
+                }
+            """.trimIndent()
+
+            val responseJson = callGeminiForJson(trimmedKey, model, prompt, maxTokens = 4096) ?: return@withContext null
+
+            val intentTag = responseJson.optString("intentTag").takeIf { it.isNotBlank() } ?: "custom_automation"
+            val generalizedIntent = responseJson.optString("generalizedIntent").takeIf { it.isNotBlank() } ?: session.originalUtterance
+
+            val supportedPkgs = mutableListOf<String>()
+            val pkgsArr = responseJson.optJSONArray("supportedPackages")
+            if (pkgsArr != null) {
+                for (i in 0 until pkgsArr.length()) {
+                    val p = pkgsArr.optString(i)
+                    if (p.isNotBlank()) supportedPkgs.add(p)
+                }
+            }
+
+            val slotsList = mutableListOf<GeminiSlotSynthesis>()
+            val slotsArr = responseJson.optJSONArray("slots")
+            if (slotsArr != null) {
+                for (i in 0 until slotsArr.length()) {
+                    val sObj = slotsArr.getJSONObject(i)
+                    slotsList.add(
+                        GeminiSlotSynthesis(
+                            name = sObj.getString("name"),
+                            type = sObj.optString("type", "string"),
+                            required = sObj.optBoolean("required", true),
+                            defaultValue = sObj.optString("defaultValue").takeIf { it.isNotBlank() && it != "null" }
+                        )
+                    )
+                }
+            }
+
+            val stepsList = mutableListOf<GeminiStepSynthesis>()
+            val stepsArr = responseJson.optJSONArray("steps")
+            if (stepsArr != null) {
+                for (i in 0 until stepsArr.length()) {
+                    val stepObj = stepsArr.getJSONObject(i)
+                    val targetObj = stepObj.optJSONObject("target")
+                    val transObj = stepObj.optJSONObject("expectedTransition")
+
+                    val targetText = targetObj?.optString("text")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("targetText").takeIf { it.isNotBlank() && it != "null" }
+                    val targetDesc = targetObj?.optString("contentDescription")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("targetContentDescription").takeIf { it.isNotBlank() && it != "null" }
+                    val targetResId = targetObj?.optString("resourceId")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("targetResourceId").takeIf { it.isNotBlank() && it != "null" }
+                    val targetRole = targetObj?.optString("semanticRole")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("targetSemanticRole").takeIf { it.isNotBlank() && it != "null" }
+                    val targetParent = targetObj?.optString("parentContext")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("targetParentContext").takeIf { it.isNotBlank() && it != "null" }
+                    val domainConcept = targetObj?.optString("domainConcept")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("domainConcept").takeIf { it.isNotBlank() && it != "null" }
+
+                    val expectedText = transObj?.optString("expectedTextSubstring")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("expectedTextSubstring").takeIf { it.isNotBlank() && it != "null" }
+                    val expectedPkg = transObj?.optString("expectedPackage")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: stepObj.optString("expectedPackage").takeIf { it.isNotBlank() && it != "null" }
+
+                    stepsList.add(
+                        GeminiStepSynthesis(
+                            stepOrder = stepObj.optInt("stepOrder", i),
+                            actionType = stepObj.optString("actionType", "CLICK"),
+                            targetText = targetText,
+                            targetContentDescription = targetDesc,
+                            targetResourceId = targetResId,
+                            targetSemanticRole = targetRole,
+                            targetParentContext = targetParent,
+                            domainConcept = domainConcept,
+                            inputText = stepObj.optString("inputText").takeIf { it.isNotBlank() && it != "null" },
+                            slotBinding = stepObj.optString("slotBinding").takeIf { it.isNotBlank() && it != "null" },
+                            isBoundary = stepObj.optBoolean("isBoundary", false),
+                            expectedTextSubstring = expectedText,
+                            expectedPackage = expectedPkg,
+                            explanation = stepObj.optString("explanation").takeIf { it.isNotBlank() && it != "null" }
+                        )
+                    )
+                }
+            }
+
+            GeminiWorkflowResult(
+                intentTag = intentTag,
+                generalizedIntent = generalizedIntent,
+                supportedPackages = supportedPkgs,
+                slots = slotsList,
+                steps = stepsList
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "synthesizeCompleteWorkflow failed", e)
             null
         }
     }
@@ -713,7 +982,8 @@ class GeminiApiClient(
     private fun callGeminiForJson(
         apiKey: String,
         model: String,
-        prompt: String
+        prompt: String,
+        maxTokens: Int = 1024
     ): JSONObject? {
         val trimmedKey = apiKey.trim()
         val requestBody = JSONObject().apply {
@@ -726,7 +996,7 @@ class GeminiApiClient(
             put("contents", contentsArray)
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.2)
-                put("maxOutputTokens", 1024)
+                put("maxOutputTokens", maxTokens)
                 put("responseMimeType", "application/json")
             })
         }

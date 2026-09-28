@@ -59,6 +59,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -145,6 +146,7 @@ fun HomeScreen(
     val speechError by viewModel.speechErrorMessage.collectAsState()
     val recentRuns by viewModel.recentRuns.collectAsState()
     val activeSession by viewModel.currentTeachingSession.collectAsState()
+    val isSynthesizingWorkflow by viewModel.isSynthesizingWorkflow.collectAsState()
 
     var manualTextInput by remember { mutableStateOf("") }
     var showTeachSetupDialog by remember { mutableStateOf(false) }
@@ -990,6 +992,42 @@ fun HomeScreen(
                 context.startActivity(homeIntent)
             }
         )
+    }
+
+    if (isSynthesizingWorkflow) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { /* Non-dismissible while synthesizing */ }
+        ) {
+            Card(
+                shape = CardShape,
+                colors = CardDefaults.cardColors(containerColor = SaysoSurface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = SaysoPrimary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Text(
+                        text = "Synthesizing with Gemini GenAI...",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SaysoOnSurface
+                    )
+                    Text(
+                        text = "Sending recorded demonstration steps to Gemini to synthesize a robust automation workflow.",
+                        fontSize = 12.sp,
+                        color = SaysoOnSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
     }
 
     reviewWorkflow?.let { workflow ->

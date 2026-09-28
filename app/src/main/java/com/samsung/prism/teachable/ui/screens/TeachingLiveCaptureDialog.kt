@@ -82,7 +82,7 @@ fun TeachingLiveCaptureDialog(
     onMinimize: () -> Unit = {}
 ) {
     var elapsedSeconds by remember { mutableIntStateOf(0) }
-    var actionCount by remember { mutableIntStateOf(session.retainedActions.size) }
+    var actionCount by remember { mutableIntStateOf(session.rawActions.size) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -93,7 +93,7 @@ fun TeachingLiveCaptureDialog(
 
     LaunchedEffect(session) {
         com.samsung.prism.teachable.teaching.TeachingRecorder.instance.actionStream.collect {
-            actionCount = session.retainedActions.size
+            actionCount = session.rawActions.size
         }
     }
 
@@ -234,13 +234,14 @@ fun TeachingLiveCaptureDialog(
 
                 // Captured Actions Stream
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val displayedActions = session.rawActions.ifEmpty { session.retainedActions }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Captured Actions (${session.retainedActions.size})",
+                            text = "Captured Actions (${displayedActions.size})",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = SaysoOnSurface
@@ -262,9 +263,9 @@ fun TeachingLiveCaptureDialog(
                         }
                     }
 
-                    // Map retained actions to StepDisplayItem
+                    // Map all actions to StepDisplayItem
                     val stepItems = mutableListOf<StepDisplayItem>()
-                    for ((idx, action) in session.retainedActions.withIndex()) {
+                    for ((idx, action) in displayedActions.withIndex()) {
                         stepItems.add(
                             StepDisplayItem(
                                 stepNumber = idx + 1,

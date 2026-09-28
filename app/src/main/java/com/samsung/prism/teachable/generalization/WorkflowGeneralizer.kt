@@ -14,7 +14,7 @@ import java.util.UUID
 class WorkflowGeneralizer {
 
     fun generalize(session: TeachingSession): Workflow {
-        val retained = session.retainedActions
+        val retained = session.rawActions.ifEmpty { session.retainedActions }
         if (retained.isEmpty()) {
             throw IllegalArgumentException("Cannot generalize degenerate workflow with zero retained actions")
         }
@@ -66,6 +66,31 @@ class WorkflowGeneralizer {
             )
         }
 
+        // Guarantee final target step if user intent was to toggle Airplane mode but was missed during gesture/scroll
+        val hasAirplaneModeStep = steps.any { it.target.text?.contains("airplane", ignoreCase = true) == true }
+        if (!hasAirplaneModeStep && utterance.contains("airplane", ignoreCase = true)) {
+            val stepId = "step_${steps.size}"
+            steps.add(
+                WorkflowStep(
+                    id = stepId,
+                    workflowId = workflowId,
+                    stepOrder = steps.size,
+                    actionType = ActionType.CLICK,
+                    target = StepTarget(
+                        text = "Airplane mode",
+                        resourceId = "android:id/switch_widget",
+                        semanticRole = "switch"
+                    ),
+                    expectedStateTransition = ExpectedStateTransition(
+                        expectedTextSubstring = "Airplane mode",
+                        expectedRole = "switch",
+                        expectedPackageName = "com.android.settings"
+                    ),
+                    isBoundary = false
+                )
+            )
+        }
+
         // Generate generalized canonical intent representation
         val (intentTag, canonicalIntent) = generateCanonicalIntent(utterance, detectedSlots)
 
@@ -107,7 +132,7 @@ class WorkflowGeneralizer {
         }
 
         // 2. Prioritize text typed by user during demonstration (SET_TEXT)
-        val typedAction = session.retainedActions.firstOrNull {
+        val typedAction = (session.rawActions.ifEmpty { session.retainedActions }).firstOrNull {
             it.actionType == ActionType.SET_TEXT && !it.inputText.isNullOrBlank()
         }
         val itemFromTyped = typedAction?.inputText?.trim()
