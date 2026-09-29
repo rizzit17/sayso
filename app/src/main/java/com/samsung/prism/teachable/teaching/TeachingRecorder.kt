@@ -168,6 +168,9 @@ class TeachingRecorder(
     }
 
     internal fun simulateClickEvent(targetNode: UiNode, before: UiSnapshot? = null): Boolean {
+        // Cancel any pending or recent scroll jitter immediately prior to this click
+        cancelPendingScrollJitter(targetNode)
+
         val snap = before ?: previousSnapshot ?: UiSnapshot.EMPTY
         val key = getNodeKey(targetNode)
         val now = System.currentTimeMillis()
@@ -179,6 +182,33 @@ class TeachingRecorder(
         lastClickTimestamps[key] = now
         enqueueDelayedRecording(ActionType.CLICK, targetNode, null, snap)
         return true
+    }
+
+    private fun cancelPendingScrollJitter(targetNode: UiNode) {
+        // 1. Cancel unexecuted pending SCROLL_FORWARD recordings
+        synchronized(pendingRecordings) {
+            val it = pendingRecordings.iterator()
+            while (it.hasNext()) {
+                val p = it.next()
+                if (p.actionType == ActionType.SCROLL_FORWARD && !p.isExecuted) {
+                    p.isExecuted = true
+                    it.remove()
+                    Log.i(TAG, "Cancelled pending scroll as touch jitter before click on: ${targetNode.text ?: targetNode.contentDescription}")
+                }
+            }
+        }
+
+        // 2. Retroactively mark recently recorded SCROLL_FORWARD as filtered if click occurred right after
+        val session = _currentSession.value ?: return
+        val lastRetained = session.rawActions.lastOrNull { !it.isFiltered }
+        if (lastRetained != null && lastRetained.actionType == ActionType.SCROLL_FORWARD) {
+            val now = System.currentTimeMillis()
+            if (now - lastRetained.timestamp < 1500L) {
+                lastRetained.isFiltered = true
+                lastRetained.filterReason = "Incidental touch jitter before click"
+                Log.i(TAG, "Retroactively filtered recent scroll #${session.rawActions.indexOf(lastRetained) + 1} as touch jitter before click on: ${targetNode.text ?: targetNode.contentDescription}")
+            }
+        }
     }
 
     internal fun simulateContentChangedToggle(
@@ -193,6 +223,8 @@ class TeachingRecorder(
                 targetNode.className?.contains("CheckBox", ignoreCase = true) == true
 
         if (!isToggle) return false
+
+        cancelPendingScrollJitter(targetNode)
 
         val snap = before ?: previousSnapshot
         val prevNode = snap?.allNodes?.firstOrNull { n ->
@@ -247,50 +279,139 @@ class TeachingRecorder(
         }
     }
 
-    private fun handleContentChangedToggleFallback(event: AccessibilityEvent) {
-        val source = try { event.source } catch (_: Exception) { null } ?: return
+    internal data class SwitchDescendantInfo(
+        val isChecked: Boolean,
+        val bounds: Bounds,
+        val className: String?,
+        val resourceId: String?
+    )
+
+    private fun findSwitchDescendant(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int = 0): SwitchDescendantInfo? {
+        if (depth > 4) return null
+        val count = try { node.childCount } catch (_: Exception) { 0 }
+        for (i in 0 until count) {
+            val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
+            try {
+                val cls = child.className?.toString() ?: ""
+                val resId = child.viewIdResourceName ?: ""
+                val isCheckable = try { child.isCheckable } catch (_: Exception) { false }
+                val isSwitch = isCheckable ||
+                        cls.contains("Switch", ignoreCase = true) ||
+                        cls.contains("CompoundButton", ignoreCase = true) ||
+                        cls.contains("CheckBox", ignoreCase = true) ||
+                        resId.contains("switch", ignoreCase = true)
+                if (isSwitch) {
+                    val checked = try { child.isChecked } catch (_: Exception) { false }
+                    val rect = android.graphics.Rect()
+                    child.getBoundsInScreen(rect)
+                    return SwitchDescendantInfo(
+                        isChecked = checked,
+                        bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                        className = cls,
+                        resourceId = resId.takeIf { it.isNotBlank() }
+                    )
+                }
+                val nested = findSwitchDescendant(child, depth + 1)
+                if (nested != null) return nested
+            } finally {
+                @Suppress("DEPRECATION")
+                try { child.recycle() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun findTitleTextInNode(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int = 0): String? {
+        if (depth > 4) return null
+        val resId = try { node.viewIdResourceName } catch (_: Exception) { null }
+        if (resId?.contains("title", ignoreCase = true) == true) {
+            val t = try { node.text?.toString()?.takeIf { it.isNotBlank() && !isStateOnlyString(it) } } catch (_: Exception) { null }
+            if (t != null) return t
+        }
+        val count = try { node.childCount } catch (_: Exception) { 0 }
+        for (i in 0 until count) {
+            val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
+            try {
+                val childResId = try { child.viewIdResourceName } catch (_: Exception) { null }
+                if (childResId?.contains("title", ignoreCase = true) == true) {
+                    val t = try { child.text?.toString()?.takeIf { it.isNotBlank() && !isStateOnlyString(it) } } catch (_: Exception) { null }
+                    if (t != null) return t
+                }
+                val found = findTitleTextInNode(child, depth + 1)
+                if (!found.isNullOrBlank()) return found
+            } finally {
+                @Suppress("DEPRECATION")
+                try { child.recycle() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun handleContentChangedToggleFallback(
+        event: AccessibilityEvent,
+        source: android.view.accessibility.AccessibilityNodeInfo?
+    ) {
+        val s = source ?: return
         try {
-            val isCheckable = try { source.isCheckable } catch (_: Exception) { false }
-            val cls = source.className?.toString() ?: ""
-            val isToggle = isCheckable ||
+            val isCheckable = try { s.isCheckable } catch (_: Exception) { false }
+            val cls = try { s.className?.toString() } catch (_: Exception) { null } ?: ""
+            val resId = try { s.viewIdResourceName } catch (_: Exception) { null }
+            val isDirectToggle = isCheckable ||
                     cls.contains("Switch", ignoreCase = true) ||
                     cls.contains("CompoundButton", ignoreCase = true) ||
-                    cls.contains("CheckBox", ignoreCase = true)
+                    cls.contains("CheckBox", ignoreCase = true) ||
+                    resId?.contains("switch", ignoreCase = true) == true
 
-            if (!isToggle) return
+            val switchInfo: SwitchDescendantInfo? = if (isDirectToggle) {
+                val checked = try { s.isChecked } catch (_: Exception) { false }
+                val rect = android.graphics.Rect()
+                s.getBoundsInScreen(rect)
+                SwitchDescendantInfo(
+                    isChecked = checked,
+                    bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                    className = cls,
+                    resourceId = resId
+                )
+            } else {
+                runCatching { findSwitchDescendant(s) }.getOrNull()
+            }
 
-            val currentChecked = try { source.isChecked } catch (_: Exception) { false }
-            val rect = android.graphics.Rect()
-            source.getBoundsInScreen(rect)
-            val resId = source.viewIdResourceName
-            val nodeText = source.text?.toString()
+            if (switchInfo == null) return
+
+            val currentChecked = switchInfo.isChecked
+            val rect = switchInfo.bounds
+            val targetResId = switchInfo.resourceId
+            val nodeText = try { s.text?.toString() } catch (_: Exception) { null }
 
             val prev = previousSnapshot
             val prevNode = prev?.allNodes?.firstOrNull { n ->
-                (resId != null && n.resourceId == resId) ||
-                        (!rect.isEmpty && n.bounds.left == rect.left && n.bounds.top == rect.top) ||
+                (targetResId != null && n.resourceId == targetResId) ||
+                        (!rect.isEmpty() && kotlin.math.abs(n.bounds.centerY - rect.centerY) < 40 &&
+                                (n.semanticRole == "switch" || n.className?.contains("Switch", ignoreCase = true) == true || n.isChecked != currentChecked)) ||
+                        (!rect.isEmpty() && n.bounds.left == rect.left && n.bounds.top == rect.top) ||
                         (!nodeText.isNullOrBlank() && n.text == nodeText)
             }
 
             if (prevNode != null && prevNode.isChecked != currentChecked) {
-                val key = getNodeKey(resId, nodeText, rect.left, rect.top)
+                val key = getNodeKey(targetResId, nodeText ?: prevNode.text, rect.left, rect.top)
                 val now = System.currentTimeMillis()
                 val lastTime = lastClickTimestamps[key] ?: 0L
                 if (now - lastTime > 500L) {
                     lastClickTimestamps[key] = now
                     val before = prev ?: UiTreeCapture.captureCurrentScreen()
-                    val targetNode = extractNodeFromEvent(event, before)
+                    val targetNode = extractNodeFromEvent(event, s, before).copy(
+                        semanticRole = "switch",
+                        isChecked = currentChecked
+                    )
+                    cancelPendingScrollJitter(targetNode)
                     Log.i(TAG, "Content-change toggle fallback triggered: flipped checked state (${prevNode.isChecked} -> $currentChecked) for $key")
                     enqueueDelayedRecording(ActionType.CLICK, targetNode, null, before)
                 } else {
                     Log.d(TAG, "Content-change toggle fallback skipped for $key: click already recorded ${now - lastTime}ms ago")
                 }
             }
-        } finally {
-            try {
-                @Suppress("DEPRECATION")
-                source.recycle()
-            } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Error in content-change toggle fallback: ${e.message}")
         }
     }
 
@@ -298,6 +419,7 @@ class TeachingRecorder(
      * Invoked from AccessibilityService event listener when user interacts with UI.
      */
     fun handleAccessibilityEvent(event: AccessibilityEvent) {
+        val source = try { event.source } catch (_: Exception) { null }
         try {
             val session = _currentSession.value
             if (session == null) {
@@ -312,19 +434,7 @@ class TeachingRecorder(
             val pkg = event.packageName?.toString() ?: ""
 
             // Drop source-less events from launcher/systemui/quickstep packages
-            val hasSource = try {
-                val s = event.source
-                val exists = s != null
-                try {
-                    @Suppress("DEPRECATION")
-                    s?.recycle()
-                } catch (_: Exception) {}
-                exists
-            } catch (_: Exception) {
-                false
-            }
-
-            if (shouldDropSourceLessEvent(hasSource, pkg)) {
+            if (shouldDropSourceLessEvent(source != null, pkg)) {
                 Log.d(TAG, "Dropped source-less event from launcher/systemui: pkg=$pkg, eventType=${event.eventType}")
                 return
             }
@@ -343,18 +453,13 @@ class TeachingRecorder(
             }
 
             // Do not record system navigation bar clicks (Recents, Overview, Home)
-            if (pkg == "com.android.systemui") {
-                val resId = try {
-                    val s = event.source
-                    val id = s?.viewIdResourceName?.lowercase() ?: ""
-                    try { @Suppress("DEPRECATION") s?.recycle() } catch (_: Exception) {}
-                    id
-                } catch (_: Exception) { "" }
-
+            val isNavOrLauncher = filter.isLauncherPackage(pkg) || pkg == "com.android.systemui"
+            if (isNavOrLauncher) {
+                val resId = try { source?.viewIdResourceName?.lowercase() ?: "" } catch (_: Exception) { "" }
                 if (eventSummary.contains("recent") || eventSummary.contains("overview") || eventSummary.contains("home") ||
                     resId.contains("recent") || resId.contains("overview") || resId.contains("home")
                 ) {
-                    Log.d(TAG, "Dropped SystemUI navigation event: $eventSummary (resId=$resId)")
+                    Log.d(TAG, "Dropped navigation event: $eventSummary (resId=$resId, pkg=$pkg)")
                     return
                 }
             }
@@ -371,13 +476,13 @@ class TeachingRecorder(
                 AccessibilityEvent.TYPE_VIEW_CLICKED,
                 AccessibilityEvent.TYPE_VIEW_SELECTED -> {
                     val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
-                    val targetNode = extractNodeFromEvent(event, before)
+                    val targetNode = extractNodeFromEvent(event, source, before)
                     simulateClickEvent(targetNode, before)
                 }
 
                 AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
                     val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
-                    val targetNode = extractNodeFromEvent(event, before)
+                    val targetNode = extractNodeFromEvent(event, source, before)
                     enqueueDelayedRecording(ActionType.LONG_CLICK, targetNode, null, before)
                 }
 
@@ -385,7 +490,7 @@ class TeachingRecorder(
                     val text = event.text.joinToString("")
                     if (text.isNotBlank()) {
                         val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
-                        val targetNode = extractNodeFromEvent(event, before)
+                        val targetNode = extractNodeFromEvent(event, source, before)
                         enqueueDelayedRecording(ActionType.SET_TEXT, targetNode, text, before)
                     }
                 }
@@ -395,17 +500,20 @@ class TeachingRecorder(
                     if (now - lastScrollTimestamp > 1000L) {
                         lastScrollTimestamp = now
                         val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
-                        val targetNode = extractNodeFromEvent(event, before)
+                        val targetNode = extractNodeFromEvent(event, source, before)
                         enqueueDelayedRecording(ActionType.SCROLL_FORWARD, targetNode, null, before)
                     }
                 }
 
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                    handleContentChangedToggleFallback(event)
+                    handleContentChangedToggleFallback(event, source)
                 }
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Error handling accessibility event (${event.eventType}, pkg=${event.packageName}): ${e.message}", e)
+        } finally {
+            @Suppress("DEPRECATION")
+            try { source?.recycle() } catch (_: Exception) {}
         }
     }
 
@@ -474,32 +582,77 @@ class TeachingRecorder(
         return session
     }
 
-    private fun extractNodeFromEvent(event: AccessibilityEvent, before: UiSnapshot? = null): UiNode {
-        val source = try {
-            event.source
-        } catch (e: Exception) {
-            null
-        }
+    internal fun extractNodeFromEvent(
+        event: AccessibilityEvent,
+        source: android.view.accessibility.AccessibilityNodeInfo? = null,
+        before: UiSnapshot? = null
+    ): UiNode {
+        val s = source ?: runCatching { event.source }.getOrNull()
 
-        if (source != null) {
+        if (s != null) {
             try {
                 val rect = android.graphics.Rect()
-                source.getBoundsInScreen(rect)
-                var text = source.text?.toString()?.takeIf { it.isNotBlank() } ?: event.text.joinToString(" ").takeIf { it.isNotBlank() }
-                var desc = source.contentDescription?.toString()?.takeIf { it.isNotBlank() } ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
-                val cls = source.className?.toString() ?: event.className?.toString()
-                val pkg = source.packageName?.toString() ?: event.packageName?.toString()
-                val resId = source.viewIdResourceName
+                s.getBoundsInScreen(rect)
+                var text = s.text?.toString()?.takeIf { it.isNotBlank() } ?: event.text.joinToString(" ").takeIf { it.isNotBlank() }
+                var desc = s.contentDescription?.toString()?.takeIf { it.isNotBlank() } ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                val cls = s.className?.toString() ?: event.className?.toString()
+                val pkg = s.packageName?.toString() ?: event.packageName?.toString()
+                val resId = s.viewIdResourceName
 
+                val isCheckable = try { s.isCheckable } catch (_: Exception) { false }
+                val isDirectSwitch = isCheckable ||
+                        cls?.contains("Switch", ignoreCase = true) == true ||
+                        cls?.contains("CompoundButton", ignoreCase = true) == true ||
+                        cls?.contains("CheckBox", ignoreCase = true) == true ||
+                        resId?.contains("switch", ignoreCase = true) == true
+
+                val switchInfo: SwitchDescendantInfo? = if (isDirectSwitch) {
+                    val checked = try { s.isChecked } catch (_: Exception) { false }
+                    SwitchDescendantInfo(
+                        isChecked = checked,
+                        bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                        className = cls,
+                        resourceId = resId
+                    )
+                } else {
+                    val direct = runCatching { findSwitchDescendant(s) }.getOrNull()
+                    if (direct != null) {
+                        direct
+                    } else {
+                        // Check parent/ancestor container for sibling switch (e.g. TextView in SwitchPreference row)
+                        runCatching {
+                            var p = s.parent
+                            var found: SwitchDescendantInfo? = null
+                            var climb = 0
+                            while (p != null && found == null && climb < 3) {
+                                found = findSwitchDescendant(p)
+                                if (found != null) break
+                                val nextP = p.parent
+                                @Suppress("DEPRECATION")
+                                try { p.recycle() } catch (_: Exception) {}
+                                p = nextP
+                                climb++
+                            }
+                            found
+                        }.getOrNull()
+                    }
+                }
+
+                val isToggle = switchInfo != null
                 val semanticRole = when {
-                    cls?.contains("Switch", ignoreCase = true) == true ||
-                    cls?.contains("CompoundButton", ignoreCase = true) == true ||
-                    cls?.contains("CheckBox", ignoreCase = true) == true ||
-                    resId?.contains("switch", ignoreCase = true) == true -> "switch"
+                    isToggle -> "switch"
                     cls?.contains("Button", ignoreCase = true) == true -> "button"
                     cls?.contains("EditText", ignoreCase = true) == true -> "input_field"
                     cls?.contains("ImageView", ignoreCase = true) == true -> "image"
-                    else -> if (source.isClickable) "button" else null
+                    else -> if (s.isClickable) "button" else null
+                }
+
+                // If this is a toggle row container (e.g. LinearLayout in Settings), prefer the clean title child ("Airplane mode")
+                if (isToggle && !isDirectSwitch) {
+                    val titleChild = runCatching { findTitleTextInNode(s) }.getOrNull()
+                    if (!titleChild.isNullOrBlank()) {
+                        text = titleChild
+                    }
                 }
 
                 // If text/desc is blank or only a state indicator ("ON"/"OFF"), search hierarchy for the semantic row label
@@ -507,7 +660,7 @@ class TeachingRecorder(
                 val isDescMissingOrStateOnly = desc.isNullOrBlank() || isStateOnlyString(desc)
 
                 if (isTextMissingOrStateOnly && isDescMissingOrStateOnly) {
-                    val label = runCatching { findLabelInHierarchy(source) }.getOrNull()
+                    val label = runCatching { findLabelInHierarchy(s) }.getOrNull()
                     if (!label.isNullOrBlank()) {
                         text = label
                     }
@@ -533,8 +686,8 @@ class TeachingRecorder(
                 }
 
                 val parentContext = text
-                val isChecked = try { source.isChecked } catch (_: Exception) { false }
-                val isSelected = try { source.isSelected } catch (_: Exception) { false }
+                val isChecked = switchInfo?.isChecked ?: (try { s.isChecked } catch (_: Exception) { false })
+                val isSelected = try { s.isSelected } catch (_: Exception) { false }
 
                 return UiNode(
                     resourceId = resId,
@@ -542,20 +695,22 @@ class TeachingRecorder(
                     contentDescription = desc,
                     className = cls,
                     packageName = pkg,
-                    clickable = source.isClickable,
-                    scrollable = source.isScrollable,
-                    enabled = source.isEnabled,
+                    clickable = s.isClickable,
+                    scrollable = s.isScrollable,
+                    enabled = s.isEnabled,
                     isChecked = isChecked,
                     isSelected = isSelected,
                     semanticRole = semanticRole,
                     parentContext = parentContext,
                     bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom)
                 )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error inspecting AccessibilityNodeInfo: ${e.message}")
             } finally {
-                try {
+                if (source == null) {
                     @Suppress("DEPRECATION")
-                    source.recycle()
-                } catch (_: Exception) {}
+                    try { s.recycle() } catch (_: Exception) {}
+                }
             }
         }
 
@@ -581,6 +736,18 @@ class TeachingRecorder(
         val cls = className?.toString()
         val pkg = packageName?.toString()
 
+        val isToggle = cls?.contains("Switch", ignoreCase = true) == true ||
+                cls?.contains("CompoundButton", ignoreCase = true) == true ||
+                cls?.contains("CheckBox", ignoreCase = true) == true
+
+        val semanticRole = when {
+            isToggle -> "switch"
+            cls?.contains("Button", ignoreCase = true) == true -> "button"
+            cls?.contains("EditText", ignoreCase = true) == true -> "input_field"
+            cls?.contains("ImageView", ignoreCase = true) == true -> "image"
+            else -> "button"
+        }
+
         return UiNode(
             text = text,
             contentDescription = desc,
@@ -588,6 +755,7 @@ class TeachingRecorder(
             packageName = pkg,
             clickable = true,
             isChecked = isChecked,
+            semanticRole = semanticRole,
             bounds = Bounds.ZERO
         )
     }

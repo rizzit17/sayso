@@ -161,4 +161,71 @@ class IrrelevantActionFilterTest {
         // tap1 should not be cancelled because it was not immediately preceding
         assertFalse(tap1.isFiltered)
     }
+
+    @Test
+    fun testRecentsNavigationOnLauncherIsFiltered() {
+        val session = TeachingSession(
+            originalUtterance = "Toggle Airplane Mode From Settings",
+            targetPackageHint = "com.android.settings"
+        )
+        val snap = UiSnapshot(packageName = "com.android.settings")
+
+        val recentsNode = UiNode(
+            resourceId = "com.android.systemui:id/recent_apps",
+            className = "android.widget.ImageView",
+            packageName = "com.google.android.apps.nexuslauncher",
+            clickable = true
+        )
+        val recentsAction = RawAction(
+            packageName = "com.google.android.apps.nexuslauncher",
+            actionType = ActionType.CLICK,
+            targetNode = recentsNode,
+            screenBefore = snap,
+            screenAfter = snap
+        )
+
+        val eval = filter.evaluate(recentsAction, session, snap, snap)
+        assertFalse("Recents button click on launcher must be filtered as irrelevant", eval.isRelevant)
+    }
+
+    @Test
+    fun testLauncherActionOutsideTargetAppIsFiltered() {
+        val session = TeachingSession(
+            originalUtterance = "Toggle Airplane Mode From Settings",
+            targetPackageHint = "com.android.settings"
+        )
+        val settingsSnap = UiSnapshot(packageName = "com.android.settings")
+
+        // First action in settings
+        val settingsNode = UiNode(
+            text = "Network & internet",
+            packageName = "com.android.settings",
+            clickable = true
+        )
+        val firstAction = RawAction(
+            packageName = "com.android.settings",
+            actionType = ActionType.CLICK,
+            targetNode = settingsNode,
+            screenBefore = settingsSnap,
+            screenAfter = settingsSnap
+        )
+        session.rawActions.add(firstAction)
+
+        // Then action on launcher
+        val launcherNode = UiNode(
+            text = "SettingsClear",
+            packageName = "com.google.android.apps.nexuslauncher",
+            clickable = true
+        )
+        val launcherAction = RawAction(
+            packageName = "com.google.android.apps.nexuslauncher",
+            actionType = ActionType.CLICK,
+            targetNode = launcherNode,
+            screenBefore = settingsSnap,
+            screenAfter = settingsSnap
+        )
+
+        val eval = filter.evaluate(launcherAction, session, settingsSnap, settingsSnap)
+        assertFalse("Launcher action while target app is Settings must be filtered", eval.isRelevant)
+    }
 }

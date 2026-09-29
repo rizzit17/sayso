@@ -234,7 +234,7 @@ fun TeachingLiveCaptureDialog(
 
                 // Captured Actions Stream
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val displayedActions = session.rawActions.ifEmpty { session.retainedActions }
+                    val displayedActions = session.retainedActions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,

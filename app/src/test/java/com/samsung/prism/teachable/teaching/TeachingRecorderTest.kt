@@ -491,4 +491,73 @@ class TeachingRecorderTest {
         assertEquals(1, session.rawActions.size)
         assertEquals(ActionType.CLICK, session.rawActions[0].actionType)
     }
+
+    @Test
+    fun testExtractNodeFromFallbackAssignsSwitchRole() {
+        val fallbackNode = recorder.extractNodeFromFallback(
+            texts = listOf("ON"),
+            contentDescription = null,
+            className = "android.widget.Switch",
+            packageName = "com.android.settings",
+            isChecked = true
+        )
+        assertEquals("switch", fallbackNode.semanticRole)
+        assertTrue(fallbackNode.isChecked)
+        assertEquals("ON", fallbackNode.text)
+    }
+
+    @Test
+    fun testPruneTrailingReturningActionsRemovesLauncherAndRecents() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val snap = UiSnapshot(packageName = "com.android.settings")
+
+        // 1. Valid settings action: click Network
+        val netNode = UiNode(text = "Network & internet", packageName = "com.android.settings", clickable = true)
+        recorder.recordAction(ActionType.CLICK, netNode, null, snap, snap)
+
+        // 2. Valid settings action: click Airplane mode
+        val switchNode = UiNode(
+            text = "Airplane mode",
+            className = "android.widget.Switch",
+            semanticRole = "switch",
+            packageName = "com.android.settings",
+            clickable = true,
+            isChecked = true
+        )
+        recorder.recordAction(ActionType.CLICK, switchNode, null, snap, snap)
+
+        // 3. User switches back via Recents (launcher / systemui)
+        val recentsNode = UiNode(
+            resourceId = "recent_apps",
+            text = "Recents",
+            className = "android.widget.ImageView",
+            packageName = "com.google.android.apps.nexuslauncher",
+            clickable = true
+        )
+        recorder.recordAction(ActionType.CLICK, recentsNode, null, snap, snap)
+
+        // Stop session: trailing Recents action must be pruned
+        val stopped = recorder.stopSession()
+        assertEquals(2, stopped.retainedActions.size)
+        assertEquals("Network & internet", stopped.retainedActions[0].targetNode.text)
+        assertEquals("Airplane mode", stopped.retainedActions[1].targetNode.text)
+    }
+
+    @Test
+    fun testTouchJitterScrollCancelledBySubsequentClick() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val snap = UiSnapshot(packageName = "com.android.settings")
+
+        // 1. Incidental scroll action enqueued or recorded right before click
+        val scrollNode = UiNode(text = "Google", packageName = "com.android.settings", scrollable = true)
+        recorder.recordAction(ActionType.SCROLL_FORWARD, scrollNode, null, snap, snap)
+
+        // 2. Click immediately following scroll on target item
+        val clickNode = UiNode(text = "Network & internet", packageName = "com.android.settings", clickable = true)
+        recorder.simulateClickEvent(clickNode, snap)
+
+        // The prior scroll action should be retroactively filtered as touch jitter
+        assertTrue("Prior scroll must be filtered as touch jitter", session.rawActions[0].isFiltered)
+        assertEquals("Incidental touch jitter before click", session.rawActions[0].filterReason)
+    }
 }

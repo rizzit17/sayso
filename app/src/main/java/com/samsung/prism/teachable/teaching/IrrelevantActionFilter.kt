@@ -40,7 +40,9 @@ class IrrelevantActionFilter(
         screenAfter: UiSnapshot?
     ): FilterEvaluation {
         val targetPkg = action.packageName
-        val nodeText = (action.targetNode.text ?: "") + " " + (action.targetNode.contentDescription ?: "")
+        val nodeText = (action.targetNode.text ?: "") + " " +
+                (action.targetNode.contentDescription ?: "") + " " +
+                (action.targetNode.resourceId ?: "")
         val lowerText = nodeText.lowercase()
 
         // 1. Phone Call / Dialer interruption check (Bonus B1 primary use-case)
@@ -73,7 +75,8 @@ class IrrelevantActionFilter(
                 lowerText.contains("prism teachable") ||
                 lowerText.contains("sayso") ||
                 lowerText.contains("recent") ||
-                lowerText.contains("overview")
+                lowerText.contains("overview") ||
+                (isLauncher && (lowerText.contains("home") || lowerText.contains("task") || lowerText.contains("clear")))
         if (isReturningToSayso) {
             val reason = "User switching apps or returning to SaySo"
             Log.i(TAG, "Filtering action ($reason): ${action.semanticDescription} on $targetPkg")
@@ -89,6 +92,16 @@ class IrrelevantActionFilter(
                     targetPkg.contains(expectedPkg, ignoreCase = true) ||
                     expectedPkg.contains(targetPkg, ignoreCase = true) ||
                     (targetPkg.contains("settings", ignoreCase = true) && expectedPkg.contains("settings", ignoreCase = true))
+
+            if (isLauncher && !isLauncherPackage(expectedPkg)) {
+                val reason = "Launcher action outside target application ($targetPkg)"
+                Log.i(TAG, "Filtering action ($reason): ${action.semanticDescription}")
+                return FilterEvaluation(
+                    isRelevant = false,
+                    relevanceScore = 0.10f,
+                    reason = reason
+                )
+            }
 
             if (!isLauncher && !isMatchingExpected) {
                 // Allow system permission dialogs, system keyboards, and settings sub-packages
@@ -153,7 +166,7 @@ class IrrelevantActionFilter(
         return words.any { u.contains(it.lowercase()) }
     }
 
-    private fun isLauncherPackage(pkg: String): Boolean {
+    internal fun isLauncherPackage(pkg: String): Boolean {
         val lower = pkg.lowercase()
         return lower.contains("launcher") ||
                 lower.contains("quickstep") ||
