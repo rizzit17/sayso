@@ -67,7 +67,7 @@ graph TD
 
 ## 4. Finite State Machine (FSM)
 
-The execution engine is governed by a strict finite state machine with bounded retry and timeout guards:
+The execution engine is governed by a strict **20-state finite state machine** as specified in `systemdesign.md` §1.1, featuring bounded retry budgets, exponential backoff, and 30-second timeout guards:
 
 ```
 [IDLE]
@@ -76,26 +76,77 @@ The execution engine is governed by a strict finite state machine with bounded r
   │
   └─► [MATCHING_INTENT]
         │
-        ├─► (confidence >= 0.80) ──────────► [EXTRACTING_SLOTS]
-        ├─► (0.45 <= confidence < 0.80) ───► [AMBIGUOUS_INTENT] ──► Clarify / User Select
+        ├─► (confidence >= 0.80) ──────────► [EXTRACTING_SLOTS] ──► [VALIDATING_PARAMETERS]
+        │                                                                   │
+        │                                                                   ▼
+        │                                                            [LAUNCHING_APP]
+        │                                                                   │
+        │                                                                   ▼
+        │                                                            [OBSERVING_UI] ◄──────────────┐
+        │                                                                   │                      │
+        │                                                                   ▼                      │
+        │                                                            [MATCHING_STEP] ──► [RECOVERING]
+        │                                                                   │
+        │                                      ┌────────────────────────────┴────────────────────────────┐
+        │                                      ▼                                                         ▼
+        │                          [CREDENTIAL_BOUNDARY / PAYMENT_BOUNDARY]                      [EXECUTING_ACTION]
+        │                                      │ (Zero Touches: Handoff)                                 │
+        │                                      ▼                                                         ▼
+        │                                [ASKING_USER]                                           [VERIFYING_STATE]
+        │                                                                                                │
+        │                                                                                   (More steps? ┘ )
+        │                                                                                                │
+        │                                                                                                ▼
+        │                                                                                          [COMPLETED]
+        ├─► (0.45 <= confidence < 0.80) ───► [AMBIGUOUS_INTENT] ──► [ASKING_USER] / Disambiguate
         └─► (confidence < 0.45) ──────────► [UNKNOWN_INTENT] ───► Offer to Teach
 ```
 
-### Complete State Descriptions
-1. **IDLE**: Engine is resting, awaiting user voice or manual trigger.
-2. **TEACHING**: User is demonstrating a workflow; `TeachingRecorder` captures accessibility events.
+### Complete 20 Architectural State Specifications (`systemdesign.md` §1.1)
+
+#### Phase A: Teaching & Synthesis (4 States)
+1. **IDLE**: Rest state. System listens for hotword/voice trigger or manual UI action.
+2. **TEACHING**: User demonstrates actions; `TeachingRecorder` records accessibility events and UI tree snapshots.
 3. **LEARNING_CONFIRMATION**: Review sheet presents synthesized steps and slot chips for user confirmation.
-4. **READY**: Workflow is validated, parameterized, and active in the database.
-5. **RETRIEVING / MATCHING_INTENT**: `IntentMatcher` matches spoken utterance against stored workflows using token Jaccard (50%), Levenshtein (35%), and slot coverage (15%).
-6. **EXTRACTING_SLOTS**: `SlotExtractor` resolves variable entities (`item`, `quantity`, `restaurant`, `platform`, `address`).
-7. **BINDING**: `ParameterBinder` binds dynamic slot values into step targets and transitions.
-8. **EXECUTING_STEP**: `ActionExecutor` dispatches clicks, text entries, or scroll gestures.
-9. **VERIFYING_STATE**: `StateVerifier` validates that the screen signature changed, post-state diff is non-empty, and expected substrings appeared.
-10. **RECOVERING**: `RecoveryManager` executes bounded 5-stage recovery on unexpected UI.
-11. **ASKING_USER**: System is stalled or ambiguous; presents multi-modal question with candidates.
-12. **STOPPED_AT_BOUNDARY**: Execution reached a payment, OTP, PIN, or CVV screen; system safely halts and prompts the user.
-13. **COMPLETED**: All steps successfully verified; run logged to Room.
-14. **FAILED**: Execution exceeded retry budget or unrecoverable error occurred.
+4. **READY**: Workflow is validated, parameterized, and active in Room SQLite database.
+
+#### Phase B: Intent Understanding & Parameterization (5 States)
+5. **MATCHING_INTENT**: `IntentMatcher` matches spoken utterance against stored workflows using token Jaccard (50%), Levenshtein (35%), and slot coverage (15%).
+6. **UNKNOWN_INTENT**: Confidence falls below `confidenceLow` (<0.45); system politely declines unrelated commands and offers to teach.
+7. **AMBIGUOUS_INTENT**: Top candidates are within `ambiguityDelta` (≤0.08); system escalates to clarification dialog.
+8. **EXTRACTING_SLOTS**: `SlotExtractor` resolves variable entities (`item`, `quantity`, `restaurant`, `platform`, `address`).
+9. **VALIDATING_PARAMETERS**: Validates extracted slots against domain constraints and type schemas before dispatching actions.
+
+#### Phase C: Replay & Execution Pipeline (6 States)
+10. **LAUNCHING_APP**: Verifies target package installation and brings the application to the foreground.
+11. **OBSERVING_UI**: `UiTreeCapture` captures the active accessibility node hierarchy and generates a SHA-256 screen signature.
+12. **MATCHING_STEP**: `SemanticUiMatcher` scores candidate nodes via the 8-signal weighted hierarchy ($w_1$ to $w_8$).
+13. **EXECUTING_ACTION**: `ActionExecutor` dispatches clicks, text entries, or scroll gestures via native `AccessibilityService`.
+14. **VERIFYING_STATE**: `StateVerifier` validates that screen signature changed, post-state diff is non-empty, and expected substrings appeared.
+15. **RECOVERING**: `RecoveryManager` executes bounded 5-stage recovery on unexpected UI (resnapshot → dismiss overlay → relax threshold → alternate state → escalate).
+
+#### Phase D: Safety Boundary, Clarification & Terminal (5 States)
+16. **CREDENTIAL_BOUNDARY**: Reached password, OTP, CVV, or PIN surface; system halts immediately with zero touches.
+17. **PAYMENT_BOUNDARY**: Reached payment option or checkout gateway; dispatches distinctive "Your turn" security takeover card.
+18. **ASKING_USER**: System is stalled or ambiguous; presents multi-modal question with actionable chips.
+19. **COMPLETED**: All steps verified to completion; run record logged to Room database.
+20. **FAILED**: Step retry budget exceeded, recovery exhausted, or unrecoverable error encountered.
+
+### Runtime Mapping to Android `ReplayState` Enum
+In the Android Kotlin codebase, the execution lifecycle is represented cleanly by `ReplayState` (`com.samsung.prism.teachable.replay.ReplayState`):
+- `IDLE` ➔ `IDLE`, `READY`
+- `RETRIEVING` ➔ `MATCHING_INTENT`, `UNKNOWN_INTENT`, `AMBIGUOUS_INTENT`
+- `EXTRACTING_SLOTS` ➔ `EXTRACTING_SLOTS`
+- `BINDING` ➔ `VALIDATING_PARAMETERS`, `LAUNCHING_APP`
+- `EXECUTING_STEP` ➔ `OBSERVING_UI`, `MATCHING_STEP`, `EXECUTING_ACTION`
+- `VERIFYING_STATE` ➔ `VERIFYING_STATE`
+- `RECOVERING` ➔ `RECOVERING`
+- `ASKING_USER` ➔ `ASKING_USER`
+- `STOPPED_AT_BOUNDARY` ➔ `CREDENTIAL_BOUNDARY`, `PAYMENT_BOUNDARY`
+- `COMPLETED` ➔ `COMPLETED`
+- `FAILED` ➔ `FAILED`
+Teaching lifecycle states (`TEACHING`, `LEARNING_CONFIRMATION`) are governed concurrently by `TeachingRecorder` and `TeachingSession`.
+
 
 ---
 
@@ -169,29 +220,33 @@ When UI drift or unexpected popups occur, `RecoveryManager` executes a 5-stage c
 
 ## 9. Requirement Traceability Matrix (T1–T14 & B1–B3)
 
+Mapped 1:1 against the official evaluation rubric in `Theme 3 - Evaluation Criteria.pdf` and `context.md` §5:
+
 | Req ID | Criteria Name | Core Class Responsible | Test Suite Verification |
 |---|---|---|---|
-| **T1** | Teach – Food Workflow | `TeachingRecorder`, `WorkflowGeneralizer` | `EvaluationTestSuite.testT1_ExactWorkflowExecution` |
-| **T2** | Exact Replay | `Orchestrator`, `SemanticUiMatcher` | `EvaluationTestSuite.testT2_MultiStepFlow` |
+| **T1** | Teach – Food Workflow | `TeachingRecorder`, `WorkflowGeneralizer` | `EvaluationTestSuite.testT1_TeachFoodWorkflow` |
+| **T2** | Exact Replay (Verbatim) | `Orchestrator`, `SemanticUiMatcher` | `EvaluationTestSuite.testT2_ExactReplay` |
 | **T3** | Paraphrased Voice Command | `IntentMatcher` (token Jaccard + Levenshtein) | `EvaluationTestSuite.testT3_ParaphrasedVoiceCommand` |
-| **T4** | Dynamic Slot: Item | `SlotExtractor`, `ParameterBinder` | `EvaluationTestSuite.testT4_NoiseAndCasualSpeechHandling` |
-| **T5** | Dynamic Slot: Quantity | `SlotExtractor` word-number mapping (`"two"` -> `2`) | `EvaluationTestSuite.testT10_AlteredSlotExecution` |
-| **T6** | Dynamic Slot: Address | `SlotExtractor` address parsing (`"Home"`, `"Work"`) | `EvaluationTestSuite.testT10_AlteredSlotExecution` |
-| **T7** | Screen Drift & State Recovery | `RecoveryManager` 5-stage chain & `UiDiff` | `EvaluationTestSuite.testT7_UiDriftAndLayoutShift` |
-| **T8** | Teach – E-Commerce | `TeachingRecorder` + `PrismDatabase` Room storage | `EvaluationTestSuite.testT1_ExactWorkflowExecution` |
-| **T9** | Cross-App Slot Execution | `ParameterBinder` binding `{search_term}` into Amazon | `EvaluationTestSuite.testT9_DynamicContent_ItemSwapping` |
-| **T10** | Genuinely Stuck Detection | `StuckDetector` screen-loop counter ($\ge 3$ attempts) | `EvaluationTestSuite.testT12_StuckDetectionAndClarification` |
-| **T11** | Credential Boundary Guard | `CredentialBoundaryDetector` (5 layers, 0 touches) | `EvaluationTestSuite.testT11_PaymentCredentialBoundaryHalt` |
-| **T12** | Unknown Intent Rejection | `IntentMatcher` confidence check (<0.45 returns `Unknown`) | `EvaluationTestSuite.testT6_NegativeIntentRejection` |
-| **T13** | Intent Ambiguity Resolution | `WorkflowRetriever` delta check ($\le 0.08$ triggers `Ambiguous`) | `EvaluationTestSuite.testT5_IntentDisambiguation` |
-| **T14** | Reporting & Run History | `RunResult`, `WorkflowRepository.recordRun()` | `EvaluationTestSuite.testT14_ExecutionSpeedBenchmark` |
-| **B1** | Irrelevant Action Filtering | `IrrelevantActionFilter` (drops dialer & undo taps) | `EvaluationTestSuite.testB1_IrrelevantActionFiltering` |
-| **B2** | Cross-App Generalization | `StepTarget.domainConcept` semantic matching | `EvaluationTestSuite.testB2_CrossAppGeneralization` |
-| **B3** | Multi-Modal Clarification | `ClarificationHandler` supporting voice and tap inputs | `EvaluationTestSuite.testB3_MultiModalVoiceAndTapDisambiguation` |
+| **T4** | Dynamic Slot: Item | `SlotExtractor`, `ParameterBinder` | `EvaluationTestSuite.testT4_DynamicSlotItem` |
+| **T5** | Dynamic Slot: Quantity | `SlotExtractor` (word-number mapping e.g. "two" -> 2) | `EvaluationTestSuite.testT5_DynamicSlotQuantity` |
+| **T6** | Dynamic Slot: Address | `SlotExtractor` (address enum & entity extraction) | `EvaluationTestSuite.testT6_DynamicSlotAddress` |
+| **T7** | Screen Drift & State Recovery | `RecoveryManager` (5-stage chain) & `UiMatcher` | `EvaluationTestSuite.testT7_ScreenDriftAndPopupRecovery` |
+| **T8** | Teach – E-Commerce Workflow | `TeachingRecorder` + `PrismDatabase` (Amazon) | `EvaluationTestSuite.testT8_TeachEcommerceWorkflow` |
+| **T9** | Cross-App Slot + Replay | `ParameterBinder` binding `{search_term}` into Amazon | `EvaluationTestSuite.testT9_CrossAppSlotReplay` |
+| **T10** | Genuinely Stuck Detection (<30s) | `StuckDetector` (loop counter & 30s timeout guard) | `EvaluationTestSuite.testT10_GenuinelyStuckDetection` |
+| **T11** | Payment & Credential Safety Guard | `CredentialBoundaryDetector` (5 layers, 0 touches) | `EvaluationTestSuite.testT11_PaymentCredentialBoundaryHalt` |
+| **T12** | Negative / Unknown Intent Rejection | `IntentMatcher` (confidence threshold < 0.45) | `EvaluationTestSuite.testT12_NegativeUnknownIntentRejection` |
+| **T13** | Intent Ambiguity Resolution | `WorkflowRetriever` (delta check triggers clarification) | `EvaluationTestSuite.testT13_IntentAmbiguityResolution` |
+| **T14** | Run History & Reporting | `RunResult`, `WorkflowRepository.recordRun()` | `EvaluationTestSuite.testT14_ReportingAndRunHistory` |
+| **B1** | Irrelevant Action Filtering (Bonus) | `IrrelevantActionFilter` (accidental tap & undo) | `EvaluationTestSuite.testB1_IrrelevantActionFiltering` |
+| **B2** | Cross-App Generalization (Bonus) | `SemanticUiMatcher` (`domainConcept` mapping) | `EvaluationTestSuite.testB2_CrossAppGeneralization` |
+| **B3** | Multi-Modal Disambiguation (Bonus) | `ClarificationHandler` (voice + tap options) | `EvaluationTestSuite.testB3_MultiModalVoiceAndTapDisambiguation` |
+
+> *Note: Additional robustness scenarios (noise & casual speech filtering, execution speed benchmark <10s, UI drift position shift, text label change, list reordering, and cross-session Room recall) are verified in `EvaluationTestSuite` auxiliary tests.*
 
 ---
 
-## 9. Google Gemini GenAI Architecture & Dual-Process Design
+## 10. Google Gemini GenAI Architecture & Dual-Process Design
 
 SaySo adopts a **Dual-Process Cognitive Architecture** that marries generative reasoning with deterministic execution guarantees:
 
@@ -205,7 +260,7 @@ SaySo adopts a **Dual-Process Cognitive Architecture** that marries generative r
 ┌───────────────────────────────┐         ┌───────────────────────────────┐
 │     SYSTEM 2 (REASONING)      │         │     SYSTEM 1 (DETERMINISTIC)  │
 │      Google Gemini GenAI      │         │   Local Fast Fallback Engine  │
-│  (1.5 Flash / 2.0 / 1.5 Pro)  │         │                               │
+│ (2.5 Flash / 2.0 Flash / 3.x) │         │                               │
 ├───────────────────────────────┤         ├───────────────────────────────┤
 │ • Speech-to-Intent Paraphrase │         │ • Token Jaccard + Levenshtein │
 │ • 1-Shot Schema Synthesis     │◄───────►│ • Rule-based Generalizer      │
@@ -228,6 +283,7 @@ SaySo adopts a **Dual-Process Cognitive Architecture** that marries generative r
 * **Conversational Paraphrase Understanding (T3)**: Google Gemini resolves complex, colloquial, indirect, or multilingual voice commands (e.g. *"Feed me dinner from the usual place on Zomato"*, *"Get two margheritas delivered home"*) directly into parameterized workflow intents.
 * **1-Shot Workflow Schema Synthesis**: When a user finishes demonstrating a task, Gemini inspects the sequence of recorded accessibility actions, UI node labels, and the original voice command to induce variable slots, types, defaults, and the generalized template.
 * **Contextual Clarification when Stuck (T10 & Bonus B3)**: When target UI elements are obscured, missing, or altered by app updates, Gemini analyzes visible candidate nodes and drafts conversational, polite questions and TTS prompts.
+* **Modern Model Lineup & Dynamic Discovery**: Defaults to **Gemini 2.0 Flash** (recommended default) and supports **Gemini 2.5 Flash**, with forward-compatibility for **Gemini 3.x / Gemini 3.8**. At runtime, `GeminiApiClient` queries Google's `/v1beta/models` endpoint to discover which models are provisioned on the user's API key, seamlessly adapting while maintaining backward compatibility with `gemini-1.5-flash` and `gemini-1.5-pro`.
 * **In-APK API Key Management ("Your Gemini API Key" Tab)**: Users and hackathon judges can enter, test, validate, and select models directly within the APK's Settings screen.
 * **Instant Local Offline Fallback**: If no Gemini API key is configured or the device is offline, SaySo seamlessly falls back to its on-device deterministic matching engine with zero latency, zero errors, and zero crash risk.
 
@@ -507,7 +563,7 @@ Compiles a teaching session into a permanent `Workflow`. Dynamically extracts ca
 
 ### GeminiConfigStore.kt [ai/GeminiConfigStore.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/ai/GeminiConfigStore.kt)
 **FILE FUNCTION:**  
-Persistent preference store managing the user-configured Google Gemini API key, selected model (`gemini-1.5-flash`, `gemini-2.0-flash`, `gemini-1.5-pro`), GenAI toggle state, and validation timestamps backed by Android `SharedPreferences`.
+Persistent preference store managing the user-configured Google Gemini API key, selected model (`gemini-2.0-flash` [default], `gemini-2.5-flash`, with backward-compatible legacy models `gemini-1.5-flash` and `gemini-1.5-pro`), GenAI toggle state, and validation timestamps backed by Android `SharedPreferences`.
 
 ### GeminiApiClient.kt [ai/GeminiApiClient.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/ai/GeminiApiClient.kt)
 **FILE FUNCTION:**  
@@ -603,7 +659,7 @@ Displays a chronological log of previous automation runs with execution status p
 
 ### SettingsScreen.kt [ui/screens/SettingsScreen.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/ui/screens/SettingsScreen.kt)
 **FILE FUNCTION:**  
-The central configuration hub featuring the dedicated **"Your Gemini API Key"** tab and the **"System & Safety"** tab. Allows users and judges to enter their Google Gemini API key with visibility toggling, test server connectivity in real time, choose between `gemini-1.5-flash`, `gemini-2.0-flash`, and `gemini-1.5-pro`, review active GenAI capabilities, and inspect Android Accessibility and 5-layer credential boundary shield status.
+The central configuration hub featuring the dedicated **"Your Gemini API Key"** tab and the **"System & Safety"** tab. Allows users and judges to enter their Google Gemini API key with visibility toggling, test server connectivity in real time, choose between `gemini-2.0-flash` (Recommended Default), `gemini-2.5-flash`, and backward-compatible models (`gemini-1.5-flash`, `gemini-1.5-pro`), dynamically discover provisioned models via `/v1beta/models`, review active GenAI capabilities, and inspect Android Accessibility and 5-layer credential boundary shield status.
 
 ### TeachFlowSetupDialog.kt [ui/screens/TeachFlowSetupDialog.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/main/java/com/samsung/prism/teachable/ui/screens/TeachFlowSetupDialog.kt)
 **FILE FUNCTION:**  
@@ -663,7 +719,7 @@ Configures typography styles matching Stitch specifications.
 
 ### EvaluationTestSuite.kt [evaluation/EvaluationTestSuite.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/test/java/com/samsung/prism/teachable/evaluation/EvaluationTestSuite.kt)
 **FILE FUNCTION:**  
-The authoritative 17-point test harness executing end-to-end scenarios validating all hackathon evaluation criteria: T1 (Teach Food), T2 (Exact Replay), T3 (Paraphrase), T4 (Noise & Speech), T5 (Ambiguity), T6 (Negative Intent Rejection), T7 (Layout Shift Drift), T8 (Autonomous Recovery), T9 (Dynamic Item Swapping), T10 (Altered Slot Execution), T11 (Payment Boundary Halt with 0 touches), T12 (Stuck Clarification), T13 (Cross-Session Recall), T14 (Execution Speed Benchmark), B1 (Irrelevant Action Filter), B2 (Cross-App Generalization), and B3 (Multi-Modal Clarification).
+The authoritative 17-point test harness mapped 1:1 against the official Samsung PRISM evaluation criteria: T1 (Teach Food Workflow), T2 (Exact Replay), T3 (Paraphrased Voice Command), T4 (Dynamic Slot: Item), T5 (Dynamic Slot: Quantity), T6 (Dynamic Slot: Address), T7 (Screen Drift & State Recovery), T8 (Teach E-Commerce Workflow), T9 (Cross-App Slot + Replay), T10 (Genuinely Stuck Detection <30s), T11 (Payment & Credential Boundary Halt with 0 touches), T12 (Negative / Unknown Intent Rejection), T13 (Intent Ambiguity Resolution), T14 (Run History & Reporting), B1 (Irrelevant Action Filter), B2 (Cross-App Generalization), and B3 (Multi-Modal Clarification), plus auxiliary robustness tests.
 
 ### CredentialBoundaryDetectorTest.kt [security/CredentialBoundaryDetectorTest.kt](file:///c:/Users/thund/StudioProjects/sayso/app/src/test/java/com/samsung/prism/teachable/security/CredentialBoundaryDetectorTest.kt)
 **FILE FUNCTION:**  

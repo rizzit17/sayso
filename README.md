@@ -25,25 +25,30 @@
 
 ## 2. Requirement Traceability Matrix (T1–T14 & B1–B3)
 
+Mapped 1:1 against the official hackathon evaluation criteria in `Theme 3 - Evaluation Criteria.pdf` and `context.md` §5:
+
 | Requirement | Description | Core Engine Class | Test Suite Verification | Status |
 |---|---|---|---|:---:|
-| **T1** | Exact Workflow Execution | `Orchestrator`, `TeachingRecorder` | `EvaluationTestSuite.testT1_ExactWorkflowExecution` | **PASSED** |
-| **T2** | Multi-Step Flow (3+ Steps) | `Workflow`, `WorkflowStep` | `EvaluationTestSuite.testT2_MultiStepFlow` | **PASSED** |
+| **T1** | Teach – Food Workflow | `TeachingRecorder`, `WorkflowGeneralizer` | `EvaluationTestSuite.testT1_TeachFoodWorkflow` | **PASSED** |
+| **T2** | Exact Replay (Verbatim) | `Orchestrator`, `SemanticUiMatcher` | `EvaluationTestSuite.testT2_ExactReplay` | **PASSED** |
 | **T3** | Paraphrased Voice Command | `IntentMatcher` (token Jaccard + Levenshtein) | `EvaluationTestSuite.testT3_ParaphrasedVoiceCommand` | **PASSED** |
-| **T4** | Noise & Casual Speech Handling | `IntentMatcher` (stopwords & noise filters) | `EvaluationTestSuite.testT4_NoiseAndCasualSpeechHandling` | **PASSED** |
-| **T5** | Intent Disambiguation | `WorkflowRetriever` (ambiguity detection) | `EvaluationTestSuite.testT5_IntentDisambiguation` | **PASSED** |
-| **T6** | Negative Intent Rejection | `IntentMatcher` (`confidenceLow` threshold) | `EvaluationTestSuite.testT6_NegativeIntentRejection` | **PASSED** |
-| **T7** | UI Drift & Dynamic Layout Shift | `SemanticUiMatcher` (8-signal hierarchy) | `EvaluationTestSuite.testT7_UiDriftAndLayoutShift` | **PASSED** |
-| **T8** | Autonomous State Recovery | `RecoveryManager` (5-stage recovery chain) | `EvaluationTestSuite.testT8_AutonomousStateRecovery` | **PASSED** |
-| **T9** | Dynamic Content / Item Swapping | `ParameterBinder`, `SlotExtractor` | `EvaluationTestSuite.testT9_DynamicContent_ItemSwapping` | **PASSED** |
-| **T10** | Altered Slot Execution | `SlotExtractor`, `ParameterBinder` | `EvaluationTestSuite.testT10_AlteredSlotExecution` | **PASSED** |
-| **T11** | Payment & Credential Safety Guard | `CredentialBoundaryDetector` (5 defense layers) | `EvaluationTestSuite.testT11_PaymentCredentialBoundaryHalt` | **PASSED** |
-| **T12** | Stuck Detection & Clarification | `StuckDetector`, `ClarificationGenerator` | `EvaluationTestSuite.testT12_StuckDetectionAndClarification` | **PASSED** |
-| **T13** | Cross-Session Workflow Recall | `PrismDatabase`, `WorkflowRepository` (Room) | `EvaluationTestSuite.testT13_CrossSessionWorkflowRecall` | **PASSED** |
-| **T14** | Execution Speed Benchmark (<10s) | `Orchestrator` execution loop | `EvaluationTestSuite.testT14_ExecutionSpeedBenchmark` | **PASSED** |
+| **T4** | Dynamic Slot: Item | `SlotExtractor`, `ParameterBinder` | `EvaluationTestSuite.testT4_DynamicSlotItem` | **PASSED** |
+| **T5** | Dynamic Slot: Quantity | `SlotExtractor` (word-number mapping e.g. "two" -> 2) | `EvaluationTestSuite.testT5_DynamicSlotQuantity` | **PASSED** |
+| **T6** | Dynamic Slot: Address | `SlotExtractor` (address enum & entity extraction) | `EvaluationTestSuite.testT6_DynamicSlotAddress` | **PASSED** |
+| **T7** | Screen Drift & State Recovery | `RecoveryManager` (5-stage chain) & `UiMatcher` | `EvaluationTestSuite.testT7_ScreenDriftAndPopupRecovery` | **PASSED** |
+| **T8** | Teach – E-Commerce Workflow | `TeachingRecorder` + `PrismDatabase` (Amazon) | `EvaluationTestSuite.testT8_TeachEcommerceWorkflow` | **PASSED** |
+| **T9** | Cross-App Slot + Replay | `ParameterBinder` binding `{search_term}` into Amazon | `EvaluationTestSuite.testT9_CrossAppSlotReplay` | **PASSED** |
+| **T10** | Genuinely Stuck Detection (<30s) | `StuckDetector` (loop counter & 30s timeout guard) | `EvaluationTestSuite.testT10_GenuinelyStuckDetection` | **PASSED** |
+| **T11** | Payment & Credential Safety Guard | `CredentialBoundaryDetector` (5 layers, 0 touches) | `EvaluationTestSuite.testT11_PaymentCredentialBoundaryHalt` | **PASSED** |
+| **T12** | Negative / Unknown Intent Rejection | `IntentMatcher` (confidence threshold < 0.45) | `EvaluationTestSuite.testT12_NegativeUnknownIntentRejection` | **PASSED** |
+| **T13** | Intent Ambiguity Resolution | `WorkflowRetriever` (delta check triggers clarification) | `EvaluationTestSuite.testT13_IntentAmbiguityResolution` | **PASSED** |
+| **T14** | Run History & Reporting | `RunResult`, `WorkflowRepository.recordRun()` | `EvaluationTestSuite.testT14_ReportingAndRunHistory` | **PASSED** |
 | **B1** | Irrelevant Action Filtering (Bonus) | `IrrelevantActionFilter` (accidental tap & undo) | `EvaluationTestSuite.testB1_IrrelevantActionFiltering` | **PASSED** |
 | **B2** | Cross-App Generalization (Bonus) | `SemanticUiMatcher` (`domainConcept` mapping) | `EvaluationTestSuite.testB2_CrossAppGeneralization` | **PASSED** |
 | **B3** | Multi-Modal Disambiguation (Bonus) | `ClarificationHandler` (voice + tap options) | `EvaluationTestSuite.testB3_MultiModalVoiceAndTapDisambiguation` | **PASSED** |
+
+> *Note: Additional robustness scenarios (noise & casual speech filtering, execution speed benchmark <10s, UI drift position shift, text label change, list reordering, and cross-session Room recall) are verified in `EvaluationTestSuite` auxiliary tests.*
+
 
 ---
 

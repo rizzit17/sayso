@@ -6,9 +6,12 @@ import com.samsung.prism.teachable.observation.Bounds
 import com.samsung.prism.teachable.observation.UiNode
 import com.samsung.prism.teachable.observation.UiSnapshot
 import com.samsung.prism.teachable.observation.UiTreeCapture
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,10 +19,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class TeachingRecorder(
     private val filter: IrrelevantActionFilter = IrrelevantActionFilter(),
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    val settleDelayMs: Long = 350L
 ) {
     private val _currentSession = MutableStateFlow<TeachingSession?>(null)
     val currentSession: StateFlow<TeachingSession?> = _currentSession.asStateFlow()
@@ -31,6 +37,20 @@ class TeachingRecorder(
 
     val isRecording: Boolean get() = _currentSession.value?.status == SessionStatus.RECORDING
 
+    private class PendingRecording(
+        val actionType: ActionType,
+        val targetNode: UiNode,
+        val inputText: String?,
+        val before: UiSnapshot,
+        @Volatile var isExecuted: Boolean = false
+    ) {
+        val lock = Any()
+    }
+
+    private val pendingRecordings = Collections.synchronizedList(mutableListOf<PendingRecording>())
+    private val recordingMutex = Mutex()
+    private val lastClickTimestamps = ConcurrentHashMap<String, Long>()
+
     fun startSession(utterance: String, targetPackageHint: String? = null): TeachingSession {
         val session = TeachingSession(
             originalUtterance = utterance,
@@ -38,6 +58,13 @@ class TeachingRecorder(
         )
         _currentSession.value = session
         previousSnapshot = null
+        lastClickTimestamps.clear()
+        synchronized(pendingRecordings) {
+            for (pending in pendingRecordings) {
+                pending.isExecuted = true
+            }
+            pendingRecordings.clear()
+        }
         Log.i(TAG, "Started teaching session: ${session.sessionId} for '$utterance'")
         return session
     }
@@ -72,6 +99,10 @@ class TeachingRecorder(
         action.filterReason = eval.reason
         action.relevanceScore = eval.relevanceScore
 
+        if (action.isFiltered) {
+            Log.i(TAG, "Action #${session.rawActions.size + 1} marked filtered (${action.filterReason}): ${action.semanticDescription} on $targetPkg")
+        }
+
         session.rawActions.add(action)
         previousSnapshot = after
 
@@ -84,30 +115,246 @@ class TeachingRecorder(
 
     private var lastScrollTimestamp = 0L
 
+    private fun getNodeKey(resId: String?, text: String?, left: Int, top: Int): String {
+        return if (!resId.isNullOrBlank()) {
+            "$resId|$left,$top"
+        } else if (!text.isNullOrBlank() && !isStateOnlyString(text)) {
+            "$text|$left,$top"
+        } else {
+            "$left,$top"
+        }
+    }
+
+    private fun getNodeKey(node: UiNode): String {
+        return getNodeKey(node.resourceId, node.text, node.bounds.left, node.bounds.top)
+    }
+
+    internal fun shouldDropSourceLessEvent(hasSource: Boolean, pkg: String): Boolean {
+        return !hasSource && (pkg.contains("launcher", ignoreCase = true) ||
+                pkg.contains("systemui", ignoreCase = true) ||
+                pkg.contains("quickstep", ignoreCase = true))
+    }
+
+    internal fun enqueueDelayedRecording(
+        actionType: ActionType,
+        targetNode: UiNode,
+        inputText: String?,
+        before: UiSnapshot
+    ) {
+        val pending = PendingRecording(actionType, targetNode, inputText, before)
+        pendingRecordings.add(pending)
+
+        scope.launch {
+            recordingMutex.withLock {
+                if (pending.isExecuted) return@withLock
+                if (settleDelayMs > 0) {
+                    delay(settleDelayMs)
+                }
+                val shouldRecord = synchronized(pending.lock) {
+                    if (!pending.isExecuted) {
+                        pending.isExecuted = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (shouldRecord) {
+                    pendingRecordings.remove(pending)
+                    val after = UiTreeCapture.captureCurrentScreen()
+                    recordAction(pending.actionType, pending.targetNode, pending.inputText, pending.before, after)
+                }
+            }
+        }
+    }
+
+    internal fun simulateClickEvent(targetNode: UiNode, before: UiSnapshot? = null): Boolean {
+        val snap = before ?: previousSnapshot ?: UiSnapshot.EMPTY
+        val key = getNodeKey(targetNode)
+        val now = System.currentTimeMillis()
+        val lastTime = lastClickTimestamps[key] ?: 0L
+        if (now - lastTime <= 500L) {
+            Log.d(TAG, "Skipping duplicate click event for node $key (recorded ${now - lastTime}ms ago)")
+            return false
+        }
+        lastClickTimestamps[key] = now
+        enqueueDelayedRecording(ActionType.CLICK, targetNode, null, snap)
+        return true
+    }
+
+    internal fun simulateContentChangedToggle(
+        targetNode: UiNode,
+        currentChecked: Boolean,
+        before: UiSnapshot? = null
+    ): Boolean {
+        val isToggle = targetNode.semanticRole == "switch" ||
+                targetNode.semanticRole == "checkbox" ||
+                targetNode.className?.contains("Switch", ignoreCase = true) == true ||
+                targetNode.className?.contains("CompoundButton", ignoreCase = true) == true ||
+                targetNode.className?.contains("CheckBox", ignoreCase = true) == true
+
+        if (!isToggle) return false
+
+        val snap = before ?: previousSnapshot
+        val prevNode = snap?.allNodes?.firstOrNull { n ->
+            (targetNode.resourceId != null && n.resourceId == targetNode.resourceId) ||
+                    (n.bounds.left == targetNode.bounds.left && n.bounds.top == targetNode.bounds.top) ||
+                    (!targetNode.text.isNullOrBlank() && n.text == targetNode.text)
+        }
+
+        if (prevNode != null && prevNode.isChecked != currentChecked) {
+            val key = getNodeKey(targetNode)
+            val now = System.currentTimeMillis()
+            val lastTime = lastClickTimestamps[key] ?: 0L
+            if (now - lastTime > 500L) {
+                lastClickTimestamps[key] = now
+                val updatedNode = targetNode.copy(isChecked = currentChecked)
+                enqueueDelayedRecording(ActionType.CLICK, updatedNode, null, snap)
+                return true
+            } else {
+                Log.d(TAG, "Content-change toggle fallback skipped for $key: click already recorded ${now - lastTime}ms ago")
+            }
+        }
+        return false
+    }
+
+    /**
+     * Flushes any pending delayed recordings immediately without waiting for delay.
+     * Guaranteed thread-safe and executes pending actions in FIFO order.
+     */
+    fun flushPendingRecordings() {
+        val toExecute = mutableListOf<PendingRecording>()
+        synchronized(pendingRecordings) {
+            val iterator = pendingRecordings.iterator()
+            while (iterator.hasNext()) {
+                val pending = iterator.next()
+                val shouldRecord = synchronized(pending.lock) {
+                    if (!pending.isExecuted) {
+                        pending.isExecuted = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (shouldRecord) {
+                    toExecute.add(pending)
+                }
+                iterator.remove()
+            }
+        }
+        for (pending in toExecute) {
+            val after = UiTreeCapture.captureCurrentScreen()
+            recordAction(pending.actionType, pending.targetNode, pending.inputText, pending.before, after)
+        }
+    }
+
+    private fun handleContentChangedToggleFallback(event: AccessibilityEvent) {
+        val source = try { event.source } catch (_: Exception) { null } ?: return
+        try {
+            val isCheckable = try { source.isCheckable } catch (_: Exception) { false }
+            val cls = source.className?.toString() ?: ""
+            val isToggle = isCheckable ||
+                    cls.contains("Switch", ignoreCase = true) ||
+                    cls.contains("CompoundButton", ignoreCase = true) ||
+                    cls.contains("CheckBox", ignoreCase = true)
+
+            if (!isToggle) return
+
+            val currentChecked = try { source.isChecked } catch (_: Exception) { false }
+            val rect = android.graphics.Rect()
+            source.getBoundsInScreen(rect)
+            val resId = source.viewIdResourceName
+            val nodeText = source.text?.toString()
+
+            val prev = previousSnapshot
+            val prevNode = prev?.allNodes?.firstOrNull { n ->
+                (resId != null && n.resourceId == resId) ||
+                        (!rect.isEmpty && n.bounds.left == rect.left && n.bounds.top == rect.top) ||
+                        (!nodeText.isNullOrBlank() && n.text == nodeText)
+            }
+
+            if (prevNode != null && prevNode.isChecked != currentChecked) {
+                val key = getNodeKey(resId, nodeText, rect.left, rect.top)
+                val now = System.currentTimeMillis()
+                val lastTime = lastClickTimestamps[key] ?: 0L
+                if (now - lastTime > 500L) {
+                    lastClickTimestamps[key] = now
+                    val before = prev ?: UiTreeCapture.captureCurrentScreen()
+                    val targetNode = extractNodeFromEvent(event, before)
+                    Log.i(TAG, "Content-change toggle fallback triggered: flipped checked state (${prevNode.isChecked} -> $currentChecked) for $key")
+                    enqueueDelayedRecording(ActionType.CLICK, targetNode, null, before)
+                } else {
+                    Log.d(TAG, "Content-change toggle fallback skipped for $key: click already recorded ${now - lastTime}ms ago")
+                }
+            }
+        } finally {
+            try {
+                @Suppress("DEPRECATION")
+                source.recycle()
+            } catch (_: Exception) {}
+        }
+    }
+
     /**
      * Invoked from AccessibilityService event listener when user interacts with UI.
      */
     fun handleAccessibilityEvent(event: AccessibilityEvent) {
         try {
-            val session = _currentSession.value ?: return
-            if (session.status != SessionStatus.RECORDING) return
+            val session = _currentSession.value
+            if (session == null) {
+                Log.d(TAG, "Dropped event: no active teaching session")
+                return
+            }
+            if (session.status != SessionStatus.RECORDING) {
+                Log.d(TAG, "Dropped event: session status is ${session.status}, not RECORDING")
+                return
+            }
 
             val pkg = event.packageName?.toString() ?: ""
+
+            // Drop source-less events from launcher/systemui/quickstep packages
+            val hasSource = try {
+                val s = event.source
+                val exists = s != null
+                try {
+                    @Suppress("DEPRECATION")
+                    s?.recycle()
+                } catch (_: Exception) {}
+                exists
+            } catch (_: Exception) {
+                false
+            }
+
+            if (shouldDropSourceLessEvent(hasSource, pkg)) {
+                Log.d(TAG, "Dropped source-less event from launcher/systemui: pkg=$pkg, eventType=${event.eventType}")
+                return
+            }
+
             // Do not record internal SaySo interactions (e.g. Stop & Save or dismiss buttons)
-            if (pkg == "com.samsung.prism.teachable") return
+            if (pkg == "com.samsung.prism.teachable") {
+                Log.d(TAG, "Dropped internal SaySo event: pkg=$pkg")
+                return
+            }
 
             // Do not record user switching back to SaySo via Recents / App Switcher
             val eventSummary = (event.text.joinToString(" ") + " " + (event.contentDescription ?: "")).lowercase()
             if (eventSummary.contains("prism teachable") || eventSummary.contains("sayso")) {
+                Log.d(TAG, "Dropped SaySo return summary event: $eventSummary")
                 return
             }
 
             // Do not record system navigation bar clicks (Recents, Overview, Home)
             if (pkg == "com.android.systemui") {
-                val resId = try { event.source?.viewIdResourceName?.lowercase() ?: "" } catch (_: Exception) { "" }
+                val resId = try {
+                    val s = event.source
+                    val id = s?.viewIdResourceName?.lowercase() ?: ""
+                    try { @Suppress("DEPRECATION") s?.recycle() } catch (_: Exception) {}
+                    id
+                } catch (_: Exception) { "" }
+
                 if (eventSummary.contains("recent") || eventSummary.contains("overview") || eventSummary.contains("home") ||
                     resId.contains("recent") || resId.contains("overview") || resId.contains("home")
                 ) {
+                    Log.d(TAG, "Dropped SystemUI navigation event: $eventSummary (resId=$resId)")
                     return
                 }
             }
@@ -125,15 +372,13 @@ class TeachingRecorder(
                 AccessibilityEvent.TYPE_VIEW_SELECTED -> {
                     val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                     val targetNode = extractNodeFromEvent(event, before)
-                    val after = UiTreeCapture.captureCurrentScreen()
-                    recordAction(ActionType.CLICK, targetNode, null, before, after)
+                    simulateClickEvent(targetNode, before)
                 }
 
                 AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
                     val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                     val targetNode = extractNodeFromEvent(event, before)
-                    val after = UiTreeCapture.captureCurrentScreen()
-                    recordAction(ActionType.LONG_CLICK, targetNode, null, before, after)
+                    enqueueDelayedRecording(ActionType.LONG_CLICK, targetNode, null, before)
                 }
 
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
@@ -141,8 +386,7 @@ class TeachingRecorder(
                     if (text.isNotBlank()) {
                         val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                         val targetNode = extractNodeFromEvent(event, before)
-                        val after = UiTreeCapture.captureCurrentScreen()
-                        recordAction(ActionType.SET_TEXT, targetNode, text, before, after)
+                        enqueueDelayedRecording(ActionType.SET_TEXT, targetNode, text, before)
                     }
                 }
 
@@ -152,20 +396,26 @@ class TeachingRecorder(
                         lastScrollTimestamp = now
                         val before = previousSnapshot ?: UiTreeCapture.captureCurrentScreen()
                         val targetNode = extractNodeFromEvent(event, before)
-                        val after = UiTreeCapture.captureCurrentScreen()
-                        recordAction(ActionType.SCROLL_FORWARD, targetNode, null, before, after)
+                        enqueueDelayedRecording(ActionType.SCROLL_FORWARD, targetNode, null, before)
                     }
+                }
+
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                    handleContentChangedToggleFallback(event)
                 }
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "Error handling accessibility event: ${e.message}", e)
+            Log.e(TAG, "Error handling accessibility event (${event.eventType}, pkg=${event.packageName}): ${e.message}", e)
         }
     }
 
     fun stopSession(truncatedAtBoundary: Boolean = false): TeachingSession {
         val session = _currentSession.value ?: throw IllegalStateException("No active session to stop")
-        
-        // Automatically prune any trailing actions on SaySo itself
+
+        // Flush any pending delayed recordings before pruning and finalizing
+        flushPendingRecordings()
+
+        // Automatically prune any trailing actions on SaySo / Recents / Launcher
         pruneTrailingReturningActions(session)
 
         session.truncatedAtBoundary = truncatedAtBoundary
@@ -180,23 +430,29 @@ class TeachingRecorder(
     }
 
     /**
-     * Prunes actions that were performed merely to bring SaySo back to the foreground to stop teaching.
+     * Prunes trailing noise actions: filtered actions, blank package, internal SaySo package,
+     * launcher/systemui/quickstep packages, or app-switching keywords.
+     * Stops at the first real target-app action.
      */
     private fun pruneTrailingReturningActions(session: TeachingSession) {
         while (session.rawActions.isNotEmpty()) {
             val last = session.rawActions.last()
             val pkg = last.packageName.lowercase()
             val text = ((last.targetNode.text ?: "") + " " + (last.targetNode.contentDescription ?: "")).lowercase()
-            val isReturningAction = pkg == "com.samsung.prism.teachable" ||
+
+            val isNoise = last.isFiltered ||
+                    pkg.isBlank() ||
+                    pkg == "com.samsung.prism.teachable" ||
+                    pkg.contains("launcher") ||
+                    pkg.contains("systemui") ||
+                    pkg.contains("quickstep") ||
                     text.contains("prism teachable") ||
                     text.contains("sayso") ||
                     text.contains("recent") ||
-                    text.contains("overview") ||
-                    (pkg.contains("systemui") && (text.contains("home") || text.contains("back") || text.contains("recent") || text.contains("overview"))) ||
-                    (pkg.contains("launcher") && (text.contains("clear") || text.contains("prism") || text.contains("sayso") || text.contains("recent")))
+                    text.contains("overview")
 
-            if (isReturningAction) {
-                Log.i(TAG, "Pruned trailing app-switch/recents action: ${last.semanticDescription}")
+            if (isNoise) {
+                Log.i(TAG, "Pruned trailing noise action: ${last.semanticDescription} (pkg=$pkg, filtered=${last.isFiltered}, reason=${last.filterReason})")
                 session.rawActions.removeAt(session.rawActions.size - 1)
             } else {
                 break
@@ -206,6 +462,12 @@ class TeachingRecorder(
 
     fun cancelSession(): TeachingSession? {
         val session = _currentSession.value ?: return null
+        synchronized(pendingRecordings) {
+            for (pending in pendingRecordings) {
+                pending.isExecuted = true
+            }
+            pendingRecordings.clear()
+        }
         session.status = SessionStatus.CANCELLED
         _currentSession.value = null
         Log.i(TAG, "Teaching session cancelled: ${session.sessionId}")
@@ -271,6 +533,8 @@ class TeachingRecorder(
                 }
 
                 val parentContext = text
+                val isChecked = try { source.isChecked } catch (_: Exception) { false }
+                val isSelected = try { source.isSelected } catch (_: Exception) { false }
 
                 return UiNode(
                     resourceId = resId,
@@ -281,6 +545,8 @@ class TeachingRecorder(
                     clickable = source.isClickable,
                     scrollable = source.isScrollable,
                     enabled = source.isEnabled,
+                    isChecked = isChecked,
+                    isSelected = isSelected,
                     semanticRole = semanticRole,
                     parentContext = parentContext,
                     bounds = Bounds(rect.left, rect.top, rect.right, rect.bottom)
@@ -293,10 +559,27 @@ class TeachingRecorder(
             }
         }
 
-        val text = event.text.joinToString("").takeIf { it.isNotBlank() }
-        val desc = event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
-        val cls = event.className?.toString()
-        val pkg = event.packageName?.toString()
+        val isChecked = try { event.isChecked } catch (_: Exception) { false }
+        return extractNodeFromFallback(
+            texts = event.text,
+            contentDescription = event.contentDescription,
+            className = event.className,
+            packageName = event.packageName,
+            isChecked = isChecked
+        )
+    }
+
+    internal fun extractNodeFromFallback(
+        texts: List<CharSequence>,
+        contentDescription: CharSequence?,
+        className: CharSequence?,
+        packageName: CharSequence?,
+        isChecked: Boolean = false
+    ): UiNode {
+        val text = texts.joinToString(" ").takeIf { it.isNotBlank() }
+        val desc = contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        val cls = className?.toString()
+        val pkg = packageName?.toString()
 
         return UiNode(
             text = text,
@@ -304,6 +587,7 @@ class TeachingRecorder(
             className = cls,
             packageName = pkg,
             clickable = true,
+            isChecked = isChecked,
             bounds = Bounds.ZERO
         )
     }

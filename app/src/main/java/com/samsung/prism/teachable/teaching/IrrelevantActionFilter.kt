@@ -1,5 +1,6 @@
 package com.samsung.prism.teachable.teaching
 
+import android.util.Log
 import com.samsung.prism.teachable.observation.UiSnapshot
 
 data class FilterEvaluation(
@@ -52,10 +53,12 @@ class IrrelevantActionFilter(
         val matchesInterruptionWord = interruptionKeywords.any { lowerText.contains(it) }
 
         if (isInterruptionPkg || (matchesInterruptionWord && !isIntentRelated(session.originalUtterance, lowerText))) {
+            val reason = if (matchesInterruptionWord) "Call/system action ignored" else "Switched to phone/system app"
+            Log.i(TAG, "Filtering action ($reason): ${action.semanticDescription} on $targetPkg")
             return FilterEvaluation(
                 isRelevant = false,
                 relevanceScore = 0.05f,
-                reason = if (matchesInterruptionWord) "Call/system action ignored" else "Switched to phone/system app"
+                reason = reason
             )
         }
 
@@ -72,10 +75,12 @@ class IrrelevantActionFilter(
                 lowerText.contains("recent") ||
                 lowerText.contains("overview")
         if (isReturningToSayso) {
+            val reason = "User switching apps or returning to SaySo"
+            Log.i(TAG, "Filtering action ($reason): ${action.semanticDescription} on $targetPkg")
             return FilterEvaluation(
                 isRelevant = false,
                 relevanceScore = 0.0f,
-                reason = "User switching apps or returning to SaySo"
+                reason = reason
             )
         }
 
@@ -94,10 +99,12 @@ class IrrelevantActionFilter(
                         (targetPkg.contains("systemui", ignoreCase = true) && !isReturningToSayso)
 
                 if (!isSystemDialog) {
+                    val reason = "Action outside target application ($targetPkg)"
+                    Log.i(TAG, "Filtering action ($reason): ${action.semanticDescription}")
                     return FilterEvaluation(
                         isRelevant = false,
                         relevanceScore = 0.20f,
-                        reason = "Action outside target application ($targetPkg)"
+                        reason = reason
                     )
                 }
             }
@@ -110,14 +117,21 @@ class IrrelevantActionFilter(
         // 3. State reversibility check: accidental tap immediately undone with no net state change
         val lastRetained = session.rawActions.lastOrNull { !it.isFiltered }
         if (lastRetained != null && screenAfter != null) {
+            val isImmediatelyPreceding = session.rawActions.lastOrNull() === lastRetained
+            val role = lastRetained.targetNode.semanticRole?.lowercase() ?: ""
+            val cls = lastRetained.targetNode.className?.lowercase() ?: ""
+            val isToggleOrSwitch = role in setOf("switch", "checkbox", "radio_button", "toggle") ||
+                    cls.contains("switch") || cls.contains("checkbox") || cls.contains("compoundbutton")
+
             val isBackOrClose = lowerText.contains("close") || lowerText.contains("back") ||
                     lowerText.contains("cancel") || action.targetNode.resourceId?.contains("close") == true
             val returnedToPriorState = screenAfter.screenSignature == lastRetained.screenBefore.screenSignature
 
-            if (isBackOrClose && returnedToPriorState) {
+            if (!isToggleOrSwitch && isImmediatelyPreceding && isBackOrClose && returnedToPriorState) {
                 // The prior tap was an accidental branch that was cancelled
                 lastRetained.isFiltered = true
                 lastRetained.filterReason = "Cancelled accidental tap"
+                Log.i(TAG, "Retroactively filtered action #${session.rawActions.indexOf(lastRetained) + 1} (${lastRetained.semanticDescription}) as accidental tap, triggered by: ${action.semanticDescription}")
                 return FilterEvaluation(
                     isRelevant = false,
                     relevanceScore = 0.15f,
@@ -147,5 +161,9 @@ class IrrelevantActionFilter(
                 lower.contains("home") ||
                 lower.contains("nexuslauncher") ||
                 pkg == "android"
+    }
+
+    companion object {
+        private const val TAG = "TeachingRecorder"
     }
 }

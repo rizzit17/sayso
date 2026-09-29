@@ -7,6 +7,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 
 class TeachingRecorderTest {
 
@@ -283,5 +286,209 @@ class TeachingRecorderTest {
         val cancelled = recorder.cancelSession()
         assertEquals(SessionStatus.CANCELLED, cancelled?.status)
         assertFalse(recorder.isRecording)
+    }
+
+    @Test
+    fun testSourceLessEventFromLauncherOrSystemUiIsIgnored() {
+        // Dropped for launcher/systemui/quickstep packages when hasSource is false
+        assertTrue(recorder.shouldDropSourceLessEvent(hasSource = false, pkg = "com.google.android.apps.nexuslauncher"))
+        assertTrue(recorder.shouldDropSourceLessEvent(hasSource = false, pkg = "com.android.systemui"))
+        assertTrue(recorder.shouldDropSourceLessEvent(hasSource = false, pkg = "com.android.quickstep"))
+
+        // Not dropped if source is present
+        assertFalse(recorder.shouldDropSourceLessEvent(hasSource = true, pkg = "com.google.android.apps.nexuslauncher"))
+        assertFalse(recorder.shouldDropSourceLessEvent(hasSource = true, pkg = "com.android.systemui"))
+
+        // Not dropped for target app even if source is absent
+        assertFalse(recorder.shouldDropSourceLessEvent(hasSource = false, pkg = "com.android.settings"))
+    }
+
+    @Test
+    fun testFallbackTextJoinUsesSpaceSeparator() {
+        // When source is null, text list ["Settings", "Clear all"] must be joined with space separator
+        val extracted = recorder.extractNodeFromFallback(
+            texts = listOf("Settings", "Clear all"),
+            contentDescription = null,
+            className = "android.widget.FrameLayout",
+            packageName = "com.google.android.apps.nexuslauncher",
+            isChecked = false
+        )
+        assertEquals("Settings Clear all", extracted.text)
+        assertFalse("Must NOT join without spaces as 'SettingsClear'", extracted.text == "SettingsClear")
+    }
+
+    @Test
+    fun testTrailingNoiseStackedPrunedOnStop() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val snap = UiSnapshot(packageName = "com.android.settings")
+
+        // 1. Real target app action: Network tab click
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Network & internet", packageName = "com.android.settings", clickable = true),
+            before = snap,
+            after = snap
+        )
+
+        // 2. Real target app action: Airplane mode switch toggle
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(
+                text = "Airplane mode",
+                packageName = "com.android.settings",
+                clickable = true,
+                isChecked = true,
+                semanticRole = "switch"
+            ),
+            before = snap,
+            after = snap
+        )
+
+        // 3. Stacked noise 1: SystemUI recents click
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Recents", packageName = "com.android.systemui", clickable = true),
+            before = snap,
+            after = snap
+        )
+
+        // 4. Stacked noise 2: Launcher "Settings Clear all" click
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Settings Clear all", packageName = "com.google.android.apps.nexuslauncher", clickable = true),
+            before = snap,
+            after = snap
+        )
+
+        // 5. Stacked noise 3: Blank package click
+        val blankSnap = UiSnapshot(packageName = "")
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Unknown", packageName = "", clickable = true),
+            before = blankSnap,
+            after = blankSnap
+        )
+
+        // 6. Stacked noise 4: SaySo stop/return card click
+        recorder.recordAction(
+            actionType = ActionType.CLICK,
+            targetNode = UiNode(text = "Stop & Save", packageName = "com.samsung.prism.teachable", clickable = true),
+            before = snap,
+            after = snap
+        )
+
+        assertEquals(6, session.rawActions.size)
+
+        // Pruning should loop from the tail, strip all 4 stacked noise actions, and retain the 2 real Settings actions
+        val stopped = recorder.stopSession()
+        assertEquals(2, stopped.retainedActions.size)
+        assertEquals("Network & internet", stopped.retainedActions[0].targetNode.text)
+        assertEquals("com.android.settings", stopped.retainedActions[0].packageName)
+        assertEquals("Airplane mode", stopped.retainedActions[1].targetNode.text)
+        assertEquals("com.android.settings", stopped.retainedActions[1].packageName)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun testAfterSnapshotCapturedPostDelay() = runTest {
+        val delayedRecorder = TeachingRecorder(
+            filter = filter,
+            scope = this,
+            settleDelayMs = 350L
+        )
+        val session = delayedRecorder.startSession("Test Settle Delay", "com.android.settings")
+        val snapBefore = UiSnapshot(packageName = "com.android.settings")
+
+        val buttonNode = UiNode(
+            text = "Airplane mode",
+            packageName = "com.android.settings",
+            clickable = true
+        )
+        delayedRecorder.enqueueDelayedRecording(
+            actionType = ActionType.CLICK,
+            targetNode = buttonNode,
+            inputText = null,
+            before = snapBefore
+        )
+
+        // Before delay advances, action has not executed
+        assertEquals(0, session.rawActions.size)
+
+        // Advance virtual time by 200ms - still not executed
+        testScheduler.advanceTimeBy(200)
+        assertEquals(0, session.rawActions.size)
+
+        // Advance virtual time to complete the 350ms settle window
+        testScheduler.advanceTimeBy(200)
+        testScheduler.runCurrent()
+        assertEquals(1, session.rawActions.size)
+        assertEquals("Airplane mode", session.rawActions[0].targetNode.text)
+    }
+
+    @Test
+    fun testToggleFallbackContentChangeFlippedCheckedState() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val switchNode = UiNode(
+            resourceId = "com.android.settings:id/switch_widget",
+            text = "Airplane mode",
+            className = "android.widget.Switch",
+            semanticRole = "switch",
+            packageName = "com.android.settings",
+            clickable = true,
+            isChecked = false,
+            bounds = Bounds(800, 300, 950, 400)
+        )
+        val beforeSnap = UiSnapshot(
+            packageName = "com.android.settings",
+            rootNode = switchNode
+        )
+
+        // Content-change with flipped checked state (false -> true) records exactly one CLICK
+        val handled = recorder.simulateContentChangedToggle(
+            targetNode = switchNode,
+            currentChecked = true,
+            before = beforeSnap
+        )
+        assertTrue("Content change with flipped state should be handled", handled)
+        recorder.flushPendingRecordings()
+        assertEquals(1, session.rawActions.size)
+        assertEquals(ActionType.CLICK, session.rawActions[0].actionType)
+        assertTrue(session.rawActions[0].targetNode.isChecked)
+    }
+
+    @Test
+    fun testToggleClickAndContentChangePairDoesNotDoubleRecord() {
+        val session = recorder.startSession("Toggle Airplane Mode", "com.android.settings")
+        val switchNode = UiNode(
+            resourceId = "com.android.settings:id/switch_widget",
+            text = "Airplane mode",
+            className = "android.widget.Switch",
+            semanticRole = "switch",
+            packageName = "com.android.settings",
+            clickable = true,
+            isChecked = false,
+            bounds = Bounds(800, 300, 950, 400)
+        )
+        val beforeSnap = UiSnapshot(
+            packageName = "com.android.settings",
+            rootNode = switchNode
+        )
+
+        // 1. User physically taps switch -> CLICK recorded
+        val clickHandled = recorder.simulateClickEvent(switchNode, beforeSnap)
+        assertTrue(clickHandled)
+
+        // 2. Secondary content change arrives right after click (within 500ms) with flipped checked state
+        val duplicateContentChange = recorder.simulateContentChangedToggle(
+            targetNode = switchNode,
+            currentChecked = true,
+            before = beforeSnap
+        )
+        assertFalse("Duplicate toggle event within 500ms must be skipped", duplicateContentChange)
+
+        recorder.flushPendingRecordings()
+        // Exactly ONE CLICK action recorded for the physical tap
+        assertEquals(1, session.rawActions.size)
+        assertEquals(ActionType.CLICK, session.rawActions[0].actionType)
     }
 }

@@ -16,6 +16,8 @@ data class UiNode(
     val enabled: Boolean = true,
     val focused: Boolean = false,
     val scrollable: Boolean = false,
+    val isChecked: Boolean = false,
+    val isSelected: Boolean = false,
     val semanticRole: String? = null,
     val parentContext: String? = null,
     val children: List<UiNode> = emptyList()
@@ -33,8 +35,10 @@ data class UiNode(
         val roleStr = semanticRole ?: (className?.substringAfterLast('.') ?: "View")
         val idStr = resourceId?.let { " id=${it.substringAfterLast(":id/")}" } ?: ""
         val clickStr = if (clickable) " [clickable]" else ""
+        val checkStr = if (isChecked) " [checked]" else ""
+        val selectStr = if (isSelected) " [selected]" else ""
         val pwStr = if (isPassword) " [PASSWORD]" else ""
-        return "[$roleStr] $label$idStr$clickStr$pwStr (${bounds.left},${bounds.top}-${bounds.right},${bounds.bottom})"
+        return "[$roleStr] $label$idStr$clickStr$checkStr$selectStr$pwStr (${bounds.left},${bounds.top}-${bounds.right},${bounds.bottom})"
     }
 
     /**
@@ -65,6 +69,8 @@ data class UiNode(
         if (!enabled) put("enabled", false)
         if (focused) put("focused", true)
         if (scrollable) put("scrollable", true)
+        if (isChecked) put("isChecked", true)
+        if (isSelected) put("isSelected", true)
         semanticRole?.let { put("semanticRole", it) }
         parentContext?.let { put("parentContext", it) }
         if (children.isNotEmpty()) {
@@ -100,6 +106,8 @@ data class UiNode(
                 enabled = json.optBoolean("enabled", true),
                 focused = json.optBoolean("focused", false),
                 scrollable = json.optBoolean("scrollable", false),
+                isChecked = json.optBoolean("isChecked", false),
+                isSelected = json.optBoolean("isSelected", false),
                 semanticRole = json.optString("semanticRole").takeIf { it.isNotEmpty() },
                 parentContext = json.optString("parentContext").takeIf { it.isNotEmpty() },
                 children = childrenList

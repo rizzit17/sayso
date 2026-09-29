@@ -23,6 +23,7 @@ import com.samsung.prism.teachable.stuck.ClarificationResult
 import com.samsung.prism.teachable.teaching.ActionType
 import com.samsung.prism.teachable.teaching.IrrelevantActionFilter
 import com.samsung.prism.teachable.teaching.RawAction
+import com.samsung.prism.teachable.teaching.TeachingRecorder
 import com.samsung.prism.teachable.teaching.TeachingSession
 import com.samsung.prism.teachable.voice.IntentMatchResult
 import com.samsung.prism.teachable.voice.IntentMatcher
@@ -38,7 +39,26 @@ import org.junit.Test
 
 /**
  * Samsung PRISM GenAI Hackathon 3.0 — Theme 3: Teachable Voice Automation
- * Full Official Evaluation Test Suite (T1 to T14 + Bonuses B1 to B3).
+ * Authoritative Evaluation Test Suite (T1 to T14 + Bonuses B1 to B3).
+ *
+ * Mapped 1:1 against the official evaluation rubric in Theme 3 - Evaluation Criteria.pdf / context.md §5:
+ * - T1: Teach – Food Workflow (Zomato Margherita Pizza)
+ * - T2: Exact Replay (Verbatim Utterance)
+ * - T3: Paraphrased Voice Command
+ * - T4: Slot Generalization: Item (Farmhouse Pizza)
+ * - T5: Slot Generalization: Quantity (e.g. "two" -> 2)
+ * - T6: Slot Generalization: Address (e.g. "deliver to work" -> "Work")
+ * - T7: Screen Drift & State Change Recovery (UI Drift & Popups)
+ * - T8: Teach – E-Commerce Workflow (Amazon Earbuds)
+ * - T9: Cross-App Slot + Replay (Amazon Phone Case)
+ * - T10: Genuinely Stuck Detection (<30s Bounded Recovery & Clarification)
+ * - T11: Credential / Payment Boundary Guard (Zero Touches, -10 Penalty Shield)
+ * - T12: Negative / Unknown Intent Rejection ("Book a cab to airport")
+ * - T13: Intent Ambiguity Resolution ("Order pizza" / "Order Domino's")
+ * - T14: Run History & Reporting
+ * - B1: Irrelevant Action Filtering (Bonus)
+ * - B2: Cross-App Generalization (Bonus)
+ * - B3: Multi-Modal Voice + Tap Disambiguation (Bonus)
  */
 class EvaluationTestSuite {
 
@@ -162,33 +182,45 @@ class EvaluationTestSuite {
     }
 
     // ==========================================
-    // T1: Exact Workflow Execution
+    // T1: Teach – Food Workflow (Demonstration + Storage)
     // ==========================================
     @Test
-    fun testT1_ExactWorkflowExecution() = runBlocking {
-        var call = 0
-        val provider = {
-            call++
-            when {
-                call <= 2 -> createSnapshot(listOf(searchBoxNode), sig = "s1")
-                call <= 4 -> createSnapshot(listOf(dominosTileNode), sig = "s2")
-                else -> createSnapshot(listOf(addButtonNode), sig = "s3")
-            }
-        }
+    fun testT1_TeachFoodWorkflow() = runBlocking {
+        val teachingRecorder = TeachingRecorder(filter = filter)
+        val session = teachingRecorder.startSession(
+            "Order a Margherita pizza from Domino's on Zomato",
+            "com.application.zomato"
+        )
+        assertTrue("Recorder must be active", teachingRecorder.isRecording)
 
-        val result = orchestrator.execute("Order Margherita pizza from Domino's on Zomato", provider)
+        val snap1 = createSnapshot(listOf(searchBoxNode), sig = "s1")
+        val snap2 = createSnapshot(listOf(dominosTileNode), sig = "s2")
+        val snap3 = createSnapshot(listOf(addButtonNode), sig = "s3")
 
-        assertEquals(RunStatus.COMPLETED, result.status)
-        assertEquals(3, result.stepResults.size)
-        assertEquals(1, fakeActionExecutor.executedTexts.size)
-        assertEquals("Margherita pizza", fakeActionExecutor.executedTexts[0].second)
+        teachingRecorder.recordAction(ActionType.SET_TEXT, searchBoxNode, "Margherita pizza", snap1, snap2)
+        teachingRecorder.recordAction(ActionType.CLICK, dominosTileNode, null, snap2, snap3)
+        teachingRecorder.recordAction(ActionType.CLICK, addButtonNode, null, snap3, snap3)
+
+        val stoppedSession = teachingRecorder.stopSession()
+        assertEquals(3, stoppedSession.retainedActions.size)
+
+        val synthesized = generalizer.generalize(stoppedSession)
+        assertNotNull("WorkflowGeneralizer must produce valid workflow", synthesized)
+        assertEquals("com.application.zomato", synthesized.supportedPackages[0])
+        assertEquals(3, synthesized.steps.size)
+        assertTrue(synthesized.slotSchema.slots.any { it.name == "item" })
+
+        repository.save(synthesized)
+        val retrieved = repository.findById(synthesized.id)
+        assertNotNull(retrieved)
+        assertEquals(WorkflowStatus.ACTIVE, retrieved!!.status)
     }
 
     // ==========================================
-    // T2: Multi-Step Flow (3+ Steps)
+    // T2: Exact Replay (Verbatim Utterance)
     // ==========================================
     @Test
-    fun testT2_MultiStepFlow() = runBlocking {
+    fun testT2_ExactReplay() = runBlocking {
         assertTrue("Workflow must have at least 3 steps", pizzaWorkflow.steps.size >= 3)
         var call = 0
         val provider = {
@@ -199,9 +231,11 @@ class EvaluationTestSuite {
                 else -> createSnapshot(listOf(addButtonNode), sig = "s3")
             }
         }
-        val result = orchestrator.execute(pizzaWorkflow.originalUtterance, provider)
+        val result = orchestrator.execute("Order Margherita pizza from Domino's on Zomato", provider)
         assertEquals(RunStatus.COMPLETED, result.status)
         assertEquals(3, result.stepResults.size)
+        assertEquals(1, fakeActionExecutor.executedTexts.size)
+        assertEquals("Margherita pizza", fakeActionExecutor.executedTexts[0].second)
     }
 
     // ==========================================
@@ -221,14 +255,20 @@ class EvaluationTestSuite {
         }
         val result = orchestrator.execute(paraphrase, provider)
         assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals("Margherita pizza", fakeActionExecutor.executedTexts[0].second)
     }
 
     // ==========================================
-    // T4: Noise / Casual Speech Handling
+    // T4: Dynamic Slot: Item Generalization
     // ==========================================
     @Test
-    fun testT4_NoiseAndCasualSpeechHandling() = runBlocking {
-        val noisySpeech = "Umm hey could you please order Margherita pizza from Domino's on Zomato right now thanks"
+    fun testT4_DynamicSlotItem() = runBlocking {
+        val slots = orchestrator.slotExtractor.extractSlots(
+            pizzaWorkflow,
+            "Order Farmhouse pizza from Domino's on Zomato"
+        )
+        assertEquals("Farmhouse pizza", slots.boundSlots["item"])
+
         var call = 0
         val provider = {
             call++
@@ -238,43 +278,64 @@ class EvaluationTestSuite {
                 else -> createSnapshot(listOf(addButtonNode), sig = "s3")
             }
         }
-        val result = orchestrator.execute(noisySpeech, provider)
+        val result = orchestrator.execute("Order Farmhouse pizza from Domino's on Zomato", provider)
         assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals("Farmhouse pizza", fakeActionExecutor.executedTexts[0].second)
     }
 
     // ==========================================
-    // T5: Intent Disambiguation
+    // T5: Dynamic Slot: Quantity Generalization
     // ==========================================
     @Test
-    fun testT5_IntentDisambiguation() = runBlocking {
-        val zomatoOrder = Workflow(
-            id = "wf_zomato",
-            intentTag = "order_dominos",
-            originalUtterance = "Order Domino's on Zomato",
-            generalizedIntent = "Order Domino's on Zomato",
-            status = WorkflowStatus.ACTIVE
+    fun testT5_DynamicSlotQuantity() = runBlocking {
+        val qtyWorkflow = pizzaWorkflow.copy(
+            slotSchema = SlotSchema(
+                listOf(
+                    SlotDefinition(name = "item", type = "string", required = true, defaultValue = "Margherita pizza"),
+                    SlotDefinition(name = "restaurant", type = "string", required = true, defaultValue = "Domino's"),
+                    SlotDefinition(name = "quantity", type = "integer", required = false, defaultValue = "1")
+                )
+            )
         )
-        val swiggyOrder = Workflow(
-            id = "wf_swiggy",
-            intentTag = "order_dominos",
-            originalUtterance = "Order Domino's on Swiggy",
-            generalizedIntent = "Order Domino's on Swiggy",
-            status = WorkflowStatus.ACTIVE
+        val slots = orchestrator.slotExtractor.extractSlots(
+            qtyWorkflow,
+            "Order two Margherita pizzas from Domino's"
         )
-        repository.save(zomatoOrder)
-        repository.save(swiggyOrder)
-
-        // Ambiguous command omitting platform
-        val result = orchestrator.execute("Order Domino's please")
-        assertEquals(RunStatus.ASKED_USER, result.status)
-        assertEquals(ReplayState.ASKING_USER, orchestrator.state.value)
+        assertEquals(2, slots.boundSlots["quantity"])
     }
 
     // ==========================================
-    // T6: UI Drift — Position Shift
+    // T6: Dynamic Slot: Address Generalization
     // ==========================================
     @Test
-    fun testT6_UiDrift_PositionShift() = runBlocking {
+    fun testT6_DynamicSlotAddress() = runBlocking {
+        val addressWorkflow = pizzaWorkflow.copy(
+            slotSchema = SlotSchema(
+                listOf(
+                    SlotDefinition(name = "item", type = "string", required = true, defaultValue = "Margherita pizza"),
+                    SlotDefinition(name = "restaurant", type = "string", required = true, defaultValue = "Domino's"),
+                    SlotDefinition(
+                        name = "address",
+                        type = "enum",
+                        required = false,
+                        defaultValue = "Home",
+                        enumValues = listOf("Home", "Work")
+                    )
+                )
+            )
+        )
+        val slots = orchestrator.slotExtractor.extractSlots(
+            addressWorkflow,
+            "Order a Margherita from Domino's, deliver to work"
+        )
+        assertEquals("Work", slots.boundSlots["address"])
+    }
+
+    // ==========================================
+    // T7: Screen Drift & State Recovery
+    // ==========================================
+    @Test
+    fun testT7_ScreenDriftAndPopupRecovery() = runBlocking {
         val shiftedNode = UiNode(
             resourceId = "com.zomato:id/restaurant_title",
             text = "Domino's Pizza",
@@ -292,76 +353,113 @@ class EvaluationTestSuite {
     }
 
     // ==========================================
-    // T7: UI Drift — Text / Label Change
+    // T8: Teach – E-Commerce Workflow (Amazon Earbuds)
     // ==========================================
     @Test
-    fun testT7_UiDrift_TextLabelChange() = runBlocking {
-        val labelDriftNode = UiNode(
-            resourceId = "com.zomato:id/add_button",
-            text = "ADD TO CART",
-            semanticRole = "button",
-            clickable = true
+    fun testT8_TeachEcommerceWorkflow() = runBlocking {
+        val amazonWf = Workflow(
+            id = "wf_amazon_earbuds",
+            intentTag = "ecommerce_search",
+            originalUtterance = "Search for wireless earbuds on Amazon and add the first result to cart",
+            generalizedIntent = "Search for {search_term} on Amazon and add the first result to cart",
+            supportedPackages = listOf("com.amazon.mShop.android.shopping"),
+            slotSchema = SlotSchema(
+                listOf(
+                    SlotDefinition(name = "search_term", type = "string", required = true, defaultValue = "wireless earbuds")
+                )
+            ),
+            steps = listOf(
+                WorkflowStep(
+                    id = "step_amazon_search",
+                    workflowId = "wf_amazon_earbuds",
+                    stepOrder = 0,
+                    actionType = ActionType.SET_TEXT,
+                    inputText = "{search_term}",
+                    target = StepTarget(
+                        resourceId = "com.amazon.mShop.android.shopping:id/rs_search_src_text",
+                        text = "Search Amazon",
+                        semanticRole = "search_box"
+                    )
+                )
+            ),
+            status = WorkflowStatus.ACTIVE
         )
-        val match = orchestrator.uiMatcher.findBestMatch(
-            pizzaWorkflow.steps[2].target,
-            createSnapshot(listOf(labelDriftNode))
-        )
-        assertNotNull(match)
-        assertTrue(match!!.score >= 0.70)
+        repository.save(amazonWf)
+
+        val activeWorkflows = repository.findActive()
+        assertEquals("Repository should hold both food and ecommerce workflows", 2, activeWorkflows.size)
+        assertTrue(activeWorkflows.any { it.id == "wf_pizza_order" })
+        assertTrue(activeWorkflows.any { it.id == "wf_amazon_earbuds" })
     }
 
     // ==========================================
-    // T8: UI Drift — Structural / List Reorder
+    // T9: Cross-App Slot + Replay (Amazon Phone Case)
     // ==========================================
     @Test
-    fun testT8_UiDrift_ListReorder() = runBlocking {
-        val items = listOf(
-            UiNode(text = "Pizza Hut", semanticRole = "card"),
-            UiNode(text = "Subway", semanticRole = "card"),
-            UiNode(resourceId = "com.zomato:id/restaurant_title", text = "Domino's Pizza", semanticRole = "card", clickable = true)
+    fun testT9_CrossAppSlotReplay() = runBlocking {
+        val amazonWf = Workflow(
+            id = "wf_amazon_search",
+            intentTag = "ecommerce_search",
+            originalUtterance = "Search for wireless earbuds on Amazon and add the first result to cart",
+            generalizedIntent = "Search for {search_term} on Amazon and add the first result to cart",
+            supportedPackages = listOf("com.amazon.mShop.android.shopping"),
+            slotSchema = SlotSchema(
+                listOf(
+                    SlotDefinition(name = "search_term", type = "string", required = true, defaultValue = "wireless earbuds")
+                )
+            ),
+            steps = listOf(
+                WorkflowStep(
+                    id = "step_amazon_search",
+                    workflowId = "wf_amazon_search",
+                    stepOrder = 0,
+                    actionType = ActionType.SET_TEXT,
+                    inputText = "{search_term}",
+                    target = StepTarget(
+                        resourceId = "com.amazon.mShop.android.shopping:id/rs_search_src_text",
+                        text = "Search Amazon",
+                        semanticRole = "search_box"
+                    )
+                )
+            ),
+            status = WorkflowStatus.ACTIVE
         )
-        val match = orchestrator.uiMatcher.findBestMatch(
-            pizzaWorkflow.steps[1].target,
-            createSnapshot(items)
-        )
-        assertNotNull(match)
-        assertEquals("Domino's Pizza", match!!.node.text)
-    }
+        repository.save(amazonWf)
 
-    // ==========================================
-    // T9: Dynamic Content / Item Swapping
-    // ==========================================
-    @Test
-    fun testT9_DynamicContent_ItemSwapping() = runBlocking {
         val slots = orchestrator.slotExtractor.extractSlots(
-            pizzaWorkflow,
-            "Order Farmhouse pizza from Domino's on Zomato"
+            amazonWf,
+            "Search for a phone case on Amazon and add the first result to cart"
         )
-        val boundStep = orchestrator.parameterBinder.bindStep(pizzaWorkflow.steps[0], slots.boundSlots)
-        assertEquals("Farmhouse pizza", boundStep.inputText)
+        val boundStep = orchestrator.parameterBinder.bindStep(amazonWf.steps[0], slots.boundSlots)
+        assertEquals("Phone case", boundStep.inputText)
     }
 
     // ==========================================
-    // T10: Voice Command with Altered Slot
+    // T10: Genuinely Stuck Detection (<30s Timeout & Clarification)
     // ==========================================
     @Test
-    fun testT10_AlteredSlotExecution() = runBlocking {
-        var call = 0
-        val provider = {
-            call++
-            when {
-                call <= 2 -> createSnapshot(listOf(searchBoxNode), sig = "s1")
-                call <= 4 -> createSnapshot(listOf(dominosTileNode), sig = "s2")
-                else -> createSnapshot(listOf(addButtonNode), sig = "s3")
-            }
-        }
-        val result = orchestrator.execute("Order Peppy Paneer pizza from Domino's on Zomato", provider)
-        assertEquals(RunStatus.COMPLETED, result.status)
-        assertEquals("Peppy Paneer pizza", fakeActionExecutor.executedTexts[0].second)
+    fun testT10_GenuinelyStuckDetection() = runBlocking {
+        val notifyMeNode = UiNode(text = "Notify Me when in stock", semanticRole = "button", clickable = true)
+        val outOfStockScreen = createSnapshot(nodes = listOf(notifyMeNode), sig = "sig_out_of_stock")
+
+        val result = orchestrator.execute(
+            "Order Margherita pizza from Domino's on Zomato",
+            snapshotProvider = { outOfStockScreen }
+        )
+
+        assertEquals(RunStatus.ASKED_USER, result.status)
+        assertEquals(ReplayState.ASKING_USER, orchestrator.state.value)
+        assertNotNull(orchestrator.stuckClarification.value)
+        assertTrue(orchestrator.stuckClarification.value!!.options.isNotEmpty())
+
+        // Test user choice resolution (Skip step)
+        val skipOption = ClarificationOption("skip", "Skip", actionType = com.samsung.prism.teachable.stuck.ClarificationActionType.SKIP_STEP)
+        val resolution = orchestrator.clarificationHandler.handleOptionSelection(skipOption)
+        assertEquals(ClarificationResult.SkipStep, resolution)
     }
 
     // ==========================================
-    // T11: Payment & Credential Boundary (Safety Guard)
+    // T11: Payment & Credential Boundary (Safety Guard, -10 Penalty Shield)
     // ==========================================
     @Test
     fun testT11_PaymentCredentialBoundaryHalt() = runBlocking {
@@ -392,47 +490,56 @@ class EvaluationTestSuite {
     }
 
     // ==========================================
-    // T12: Stuck Detection & Clarification
+    // T12: Negative / Unknown Intent Rejection
     // ==========================================
     @Test
-    fun testT12_StuckDetectionAndClarification() = runBlocking {
-        val notifyMeNode = UiNode(text = "Notify Me when in stock", semanticRole = "button", clickable = true)
-        val outOfStockScreen = createSnapshot(nodes = listOf(notifyMeNode), sig = "sig_out_of_stock")
-
-        val result = orchestrator.execute(
-            "Order Margherita pizza from Domino's on Zomato",
-            snapshotProvider = { outOfStockScreen }
+    fun testT12_NegativeUnknownIntentRejection() = runBlocking {
+        val matcher = IntentMatcher()
+        val match = matcher.match("Book a cab to the airport", listOf(pizzaWorkflow))
+        assertTrue(
+            "Unrelated command must return Unknown or low confidence",
+            match is IntentMatchResult.Unknown || (match is IntentMatchResult.Matched && match.confidence < 0.45)
         )
 
+        val result = orchestrator.execute("Book a cab to the airport")
+        assertFalse("Unrelated intent must not execute successfully", result.status == RunStatus.COMPLETED)
+        assertEquals("Zero clicks dispatched for negative intent", 0, fakeActionExecutor.executedClicks.size)
+        assertEquals("Zero text inputs dispatched for negative intent", 0, fakeActionExecutor.executedTexts.size)
+    }
+
+    // ==========================================
+    // T13: Intent Ambiguity Resolution
+    // ==========================================
+    @Test
+    fun testT13_IntentAmbiguityResolution() = runBlocking {
+        val zomatoOrder = Workflow(
+            id = "wf_zomato",
+            intentTag = "order_dominos",
+            originalUtterance = "Order Domino's on Zomato",
+            generalizedIntent = "Order Domino's on Zomato",
+            status = WorkflowStatus.ACTIVE
+        )
+        val swiggyOrder = Workflow(
+            id = "wf_swiggy",
+            intentTag = "order_dominos",
+            originalUtterance = "Order Domino's on Swiggy",
+            generalizedIntent = "Order Domino's on Swiggy",
+            status = WorkflowStatus.ACTIVE
+        )
+        repository.save(zomatoOrder)
+        repository.save(swiggyOrder)
+
+        // Ambiguous command omitting platform
+        val result = orchestrator.execute("Order Domino's please")
         assertEquals(RunStatus.ASKED_USER, result.status)
         assertEquals(ReplayState.ASKING_USER, orchestrator.state.value)
-        assertNotNull(orchestrator.stuckClarification.value)
-        assertTrue(orchestrator.stuckClarification.value!!.options.isNotEmpty())
-
-        // Test user choice resolution (Skip step)
-        val skipOption = ClarificationOption("skip", "Skip", actionType = com.samsung.prism.teachable.stuck.ClarificationActionType.SKIP_STEP)
-        val resolution = orchestrator.clarificationHandler.handleOptionSelection(skipOption)
-        assertEquals(ClarificationResult.SkipStep, resolution)
     }
 
     // ==========================================
-    // T13: Cross-Session Workflow Recall
+    // T14: Run History & Reporting
     // ==========================================
     @Test
-    fun testT13_CrossSessionWorkflowRecall() = runBlocking {
-        // Workflow saved to repository can be retrieved across sessions
-        val active = repository.findActive()
-        assertTrue(active.any { it.id == "wf_pizza_order" })
-
-        val retrieved = orchestrator.retriever.retrieve("Order Margherita pizza from Domino's on Zomato")
-        assertTrue(retrieved is com.samsung.prism.teachable.retrieval.RetrievalResult.Selected)
-    }
-
-    // ==========================================
-    // T14: Execution Speed (<10s Benchmark)
-    // ==========================================
-    @Test
-    fun testT14_ExecutionSpeedBenchmark() = runBlocking {
+    fun testT14_ReportingAndRunHistory() = runBlocking {
         var call = 0
         val provider = {
             call++
@@ -442,13 +549,17 @@ class EvaluationTestSuite {
                 else -> createSnapshot(listOf(addButtonNode), sig = "s3")
             }
         }
-
-        val startTime = System.currentTimeMillis()
         val result = orchestrator.execute("Order Margherita pizza from Domino's on Zomato", provider)
-        val elapsedMs = System.currentTimeMillis() - startTime
-
         assertEquals(RunStatus.COMPLETED, result.status)
-        assertTrue("Replay took ${elapsedMs}ms; must complete in under 10000ms", elapsedMs < 10000)
+
+        // Verify run was recorded accurately in repository
+        val runs = repository.getRecentRuns(10)
+        assertTrue("Run history must not be empty", runs.isNotEmpty())
+        val lastRun = runs.first()
+        assertEquals(RunStatus.COMPLETED, lastRun.status)
+        assertEquals("wf_pizza_order", lastRun.workflowId)
+        assertEquals(3, lastRun.stepResults.size)
+        assertTrue((lastRun.endedAt - lastRun.startedAt) >= 0)
     }
 
     // ==========================================
@@ -550,5 +661,100 @@ class EvaluationTestSuite {
         val tapRes = orchestrator.clarificationHandler.handleOptionSelection(question.options[0])
         assertTrue(tapRes is ClarificationResult.ResumeWithNode)
         assertEquals(opt1, (tapRes as ClarificationResult.ResumeWithNode).node)
+    }
+
+    // ==========================================
+    // Auxiliary Tests: Additional Robustness Scenarios
+    // ==========================================
+
+    @Test
+    fun testAuxiliary_NoiseAndCasualSpeechHandling() = runBlocking {
+        val noisySpeech = "Umm hey could you please order Margherita pizza from Domino's on Zomato right now thanks"
+        var call = 0
+        val provider = {
+            call++
+            when {
+                call <= 2 -> createSnapshot(listOf(searchBoxNode), sig = "s1")
+                call <= 4 -> createSnapshot(listOf(dominosTileNode), sig = "s2")
+                else -> createSnapshot(listOf(addButtonNode), sig = "s3")
+            }
+        }
+        val result = orchestrator.execute(noisySpeech, provider)
+        assertEquals(RunStatus.COMPLETED, result.status)
+    }
+
+    @Test
+    fun testAuxiliary_UiDrift_PositionShift() = runBlocking {
+        val shiftedNode = UiNode(
+            resourceId = "com.zomato:id/restaurant_title",
+            text = "Domino's Pizza",
+            semanticRole = "card",
+            bounds = Bounds(40, 1800, 1040, 2100),
+            clickable = true
+        )
+        val match = orchestrator.uiMatcher.findBestMatch(
+            pizzaWorkflow.steps[1].target,
+            createSnapshot(listOf(shiftedNode))
+        )
+        assertNotNull("Should match despite significant vertical position shift", match)
+        assertTrue(match!!.score >= 0.70)
+        assertEquals(shiftedNode, match.node)
+    }
+
+    @Test
+    fun testAuxiliary_UiDrift_TextLabelChange() = runBlocking {
+        val labelDriftNode = UiNode(
+            resourceId = "com.zomato:id/add_button",
+            text = "ADD TO CART",
+            semanticRole = "button",
+            clickable = true
+        )
+        val match = orchestrator.uiMatcher.findBestMatch(
+            pizzaWorkflow.steps[2].target,
+            createSnapshot(listOf(labelDriftNode))
+        )
+        assertNotNull(match)
+        assertTrue(match!!.score >= 0.70)
+    }
+
+    @Test
+    fun testAuxiliary_UiDrift_ListReorder() = runBlocking {
+        val items = listOf(
+            UiNode(text = "Pizza Hut", semanticRole = "card"),
+            UiNode(text = "Subway", semanticRole = "card"),
+            UiNode(resourceId = "com.zomato:id/restaurant_title", text = "Domino's Pizza", semanticRole = "card", clickable = true)
+        )
+        val match = orchestrator.uiMatcher.findBestMatch(
+            pizzaWorkflow.steps[1].target,
+            createSnapshot(items)
+        )
+        assertNotNull(match)
+        assertEquals("Domino's Pizza", match!!.node.text)
+    }
+
+    @Test
+    fun testAuxiliary_ExecutionSpeedBenchmark() = runBlocking {
+        var call = 0
+        val provider = {
+            call++
+            when {
+                call <= 2 -> createSnapshot(listOf(searchBoxNode), sig = "s1")
+                call <= 4 -> createSnapshot(listOf(dominosTileNode), sig = "s2")
+                else -> createSnapshot(listOf(addButtonNode), sig = "s3")
+            }
+        }
+        val startTime = System.currentTimeMillis()
+        val result = orchestrator.execute("Order Margherita pizza from Domino's on Zomato", provider)
+        val elapsedMs = System.currentTimeMillis() - startTime
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertTrue("Replay took ${elapsedMs}ms; must complete in under 10000ms", elapsedMs < 10000)
+    }
+
+    @Test
+    fun testAuxiliary_CrossSessionWorkflowRecall() = runBlocking {
+        val active = repository.findActive()
+        assertTrue(active.any { it.id == "wf_pizza_order" })
+        val retrieved = orchestrator.retriever.retrieve("Order Margherita pizza from Domino's on Zomato")
+        assertTrue(retrieved is com.samsung.prism.teachable.retrieval.RetrievalResult.Selected)
     }
 }

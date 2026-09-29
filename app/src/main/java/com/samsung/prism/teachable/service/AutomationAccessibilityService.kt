@@ -24,7 +24,10 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event != null) {
+            Log.d(TAG, "onAccessibilityEvent: type=${event.eventType}, pkg=${event.packageName}")
             com.samsung.prism.teachable.teaching.TeachingRecorder.instance.handleAccessibilityEvent(event)
+        } else {
+            Log.d(TAG, "onAccessibilityEvent: null event dropped")
         }
     }
 

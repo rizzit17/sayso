@@ -77,6 +77,9 @@ object UiTreeCapture {
             }
         }
 
+        val isChecked = try { info.isChecked } catch (_: Exception) { false }
+        val isSelected = try { info.isSelected } catch (_: Exception) { false }
+
         return UiNode(
             resourceId = resId,
             text = text,
@@ -90,6 +93,8 @@ object UiTreeCapture {
             enabled = info.isEnabled,
             focused = info.isFocused,
             scrollable = info.isScrollable,
+            isChecked = isChecked,
+            isSelected = isSelected,
             semanticRole = role,
             parentContext = parentDesc,
             children = children

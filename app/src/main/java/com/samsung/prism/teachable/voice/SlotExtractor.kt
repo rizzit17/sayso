@@ -254,7 +254,7 @@ class SlotExtractor {
 
     private fun cleanExtractedItem(raw: String): String {
         var cleaned = raw
-        val prefixesToRemove = listOf("a ", "an ", "the ", "some ")
+        val prefixesToRemove = listOf("a ", "an ", "the ", "some ", "me ", "us ")
         for (prefix in prefixesToRemove) {
             if (cleaned.startsWith(prefix, ignoreCase = true)) {
                 cleaned = cleaned.substring(prefix.length)
