@@ -169,11 +169,29 @@ PRISM strictly complies with the zero-interaction requirement on credential scre
 
 ---
 
-## 7. Submission Checklist Verification
-- [x] Full source code conforming to all constraints.
-- [x] Installable `app-debug.apk` generated.
-- [x] Participant kit preserved in `participant-kit/`.
+## 7. Submission Package & Deliverables
+The complete evaluated submission package is located in `deliverables/` and tagged on GitHub:
+
+* **Official Git Tag**: `PRISM_GENAI_HACKATHON_Y2026`
+* **Clone & Checkout**:
+  ```powershell
+  git clone https://github.com/rizzit17/sayso.git
+  git checkout PRISM_GENAI_HACKATHON_Y2026
+  ```
+
+### Contents of `deliverables/`:
+1. **`sayso.apk`**: Production-signed installable APK (v1.0.0, API 26–34) configured with release key.
+2. **`VITV_CoreCryshalis_Submission.pptx`**: Official 12-slide product & evaluation presentation formatted to Samsung PRISM's template.
+3. **`LangAI3.0_AI_Disclosure.docx`**: Completed AI Usage Disclosure Form detailing architecture assistance, safety boundaries, and feature origin classifications.
+
+### Submission Checklist Verification
+- [x] Full source code conforming to all native Android & zero-SDK constraints.
+- [x] Production signed `sayso.apk` available in `deliverables/sayso.apk`.
+- [x] Official submission presentation `VITV_CoreCryshalis_Submission.pptx` in `deliverables/`.
+- [x] AI Disclosure document `LangAI3.0_AI_Disclosure.docx` in `deliverables/`.
+- [x] Git release tag `PRISM_GENAI_HACKATHON_Y2026` pushed to remote.
 - [x] All 14 evaluation requirements (T1–T14) and 3 bonuses (B1–B3) passing in `EvaluationTestSuite`.
 - [x] Target apps declared in `docs/TARGET_APPS.md`.
 - [x] Known limitations and fallbacks documented in `docs/LIMITATIONS.md`.
 - [x] Demo recording script outlined in `docs/DEMO_CHECKLIST.md`.
+
