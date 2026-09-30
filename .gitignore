@@ -1,4 +1,4 @@
-*.iml
+﻿*.iml
 .gradle
 /local.properties
 /.idea
@@ -18,3 +18,7 @@ captures
 .classpath
 bin/
 app/bin/
+!deliverables/*.apk
+!deliverables/sayso.apk
+
+LangAI3.0_AI_Disclosure(1).docx
